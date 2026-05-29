@@ -6,46 +6,50 @@
   html {
     -webkit-font-smoothing: antialiased;
     text-rendering: optimizeLegibility;
+    scrollbar-width: none;
+    -ms-overflow-style: none;
   }
 
   body {
     margin: 0;
-    background-color: #ffffff;
-    color: #0a0a0a;
+    background-color: transparent;
+    color: #22c55e;
+    scrollbar-width: none;
+    -ms-overflow-style: none;
+  }
+
+  /* スクロール機能は維持、バーだけ視覚的に消去 */
+  * {
+    scrollbar-width: none;
+    -ms-overflow-style: none;
+  }
+
+  *::-webkit-scrollbar {
+    display: none;
+    width: 0;
+    height: 0;
   }
 }
 
-/* ── Range slider : monochrome / minimal thumb ── */
+/* ── Range slider : terminal green / square thumb ── */
 .slider::-webkit-slider-thumb {
   -webkit-appearance: none;
   appearance: none;
-  height: 14px;
-  width: 14px;
-  background: #ffffff;
-  border: 1px solid #0a0a0a;
-  border-radius: 9999px;
+  height: 12px;
+  width: 8px;
+  background: #22c55e;
+  border: none;
+  border-radius: 0;
   cursor: pointer;
-  transition: background-color 0.2s ease, transform 0.2s ease;
-}
-
-.slider::-webkit-slider-thumb:hover {
-  background: #0a0a0a;
-  transform: scale(1.1);
 }
 
 .slider::-moz-range-thumb {
-  height: 14px;
-  width: 14px;
-  background: #ffffff;
-  border: 1px solid #0a0a0a;
-  border-radius: 9999px;
+  height: 12px;
+  width: 8px;
+  background: #22c55e;
+  border: none;
+  border-radius: 0;
   cursor: pointer;
-  transition: background-color 0.2s ease, transform 0.2s ease;
-}
-
-.slider::-moz-range-thumb:hover {
-  background: #0a0a0a;
-  transform: scale(1.1);
 }
 
 .slider:focus {
