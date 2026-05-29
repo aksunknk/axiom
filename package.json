@@ -10,6 +10,9 @@
     "tauri": "tauri"
   },
   "dependencies": {
+    "@capacitor/android": "^8.3.4",
+    "@capacitor/cli": "^8.3.4",
+    "@capacitor/core": "^8.3.4",
     "@tauri-apps/api": "^2.11.0",
     "lucide-react": "^0.460.0",
     "react": "^18.3.1",
