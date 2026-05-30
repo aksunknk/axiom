@@ -100,6 +100,66 @@ function asciiBar(value: number): string {
   return "█".repeat(filled) + "░".repeat(BAR_SEGMENTS - filled);
 }
 
+const ENTROPY_THRESHOLD = 50;
+const ENTROPY_TOXICITY_WEIGHT = 1.5;
+const DEPLETION_THRESHOLD = 20;
+const CRITICAL_DEBUFF = 0.5;
+
+// リービッヒの最小律に基づく非線形スコア算出。
+// 1) ベース（エントロピー除外の良性4指標平均）
+// 2) エントロピー毒性：50超過分に 1.5倍ペナルティ
+// 3) クリティカル枯渇：物理 or 精神 <=20 で最終スコア半減
+function computeIntegrity(s: MetricState): number {
+  const base =
+    (100 - s.cognitiveLoad + s.physicalEnergy + s.mentalEnergy + s.autonomy) / 4;
+
+  let score = base;
+  if (s.entropy > ENTROPY_THRESHOLD) {
+    score -= (s.entropy - ENTROPY_THRESHOLD) * ENTROPY_TOXICITY_WEIGHT;
+  }
+
+  if (
+    s.physicalEnergy <= DEPLETION_THRESHOLD ||
+    s.mentalEnergy <= DEPLETION_THRESHOLD
+  ) {
+    score *= CRITICAL_DEBUFF;
+  }
+
+  return clamp(score);
+}
+
+function formatDelta(delta: number, withPercent = false): string {
+  const sign = delta >= 0 ? "+" : "-";
+  const mag = String(Math.abs(delta)).padStart(2, "0");
+  return `Δ ${sign}${mag}${withPercent ? "%" : ""}`;
+}
+
+// 回復/安定=緑、軽微な低下=減光、危機的低下(<=-10)=警告赤
+function deltaColor(delta: number): string {
+  if (delta <= -10) return "text-red-500";
+  if (delta < 0) return "text-green-800";
+  return "text-green-500";
+}
+
+function diagnose(s: MetricState): { text: string; className: string } {
+  if (s.mentalEnergy <= DEPLETION_THRESHOLD) {
+    return {
+      text: "> [ALERT] VRAM CRITICAL LOW. REQUIRE SHUTDOWN.",
+      className: "text-red-500",
+    };
+  }
+  if (s.entropy > ENTROPY_THRESHOLD) {
+    return {
+      text: "> [WARNING] UNSTABLE ENTROPY DETECTED.",
+      className: "text-green-300",
+    };
+  }
+  return {
+    text: "> [INFO] SYSTEM STABLE. AUTONOMY OPTIMIZED.",
+    className: "text-green-500",
+  };
+}
+
 function loadTranslucent(): boolean {
   return localStorage.getItem(TRANSLUCENT_KEY) === "1";
 }
@@ -122,6 +182,8 @@ function formatSessionNow(): string {
 
 export default function App() {
   const [state, setState] = useState<MetricState>(loadState);
+  // 起動時（前回セーブ）のスナップショット。セッション差分(Delta)の基準。
+  const [baseline] = useState<MetricState>(loadState);
   const [translucent, setTranslucent] = useState<boolean>(loadTranslucent);
   const [now, setNow] = useState(formatSessionNow);
 
@@ -146,14 +208,10 @@ export default function App() {
 
   const reset = () => setState(DEFAULT_STATE);
 
-  // 総合スコア：inverse 系は反転して平均化する
-  const integrity = useMemo(() => {
-    const total = METRICS.reduce((sum, m) => {
-      const v = state[m.key];
-      return sum + (m.inverse ? 100 - v : v);
-    }, 0);
-    return Math.round(total / METRICS.length);
-  }, [state]);
+  const integrity = useMemo(() => computeIntegrity(state), [state]);
+  const baseIntegrity = useMemo(() => computeIntegrity(baseline), [baseline]);
+  const integrityDelta = integrity - baseIntegrity;
+  const diagnosis = useMemo(() => diagnose(state), [state]);
 
   return (
     <div
@@ -182,6 +240,9 @@ export default function App() {
           </p>
         </header>
 
+        {/* ── Diagnostic log ─────────────────────── */}
+        <p className={"mt-3 " + diagnosis.className}>{diagnosis.text}</p>
+
         {/* ── Integrity ──────────────────────────── */}
         <section className="mt-6 border border-green-500 p-4">
           <p className="text-green-700">{"// SYSTEM INTEGRITY / 統合自律性スコア"}</p>
@@ -191,6 +252,9 @@ export default function App() {
             </span>
             <span className="tabular-nums text-green-300">
               {String(integrity).padStart(3, "0")}%
+            </span>
+            <span className={"tabular-nums " + deltaColor(integrityDelta)}>
+              [ {formatDelta(integrityDelta, true)} ]
             </span>
           </div>
         </section>
@@ -202,6 +266,7 @@ export default function App() {
               key={m.key}
               def={m}
               value={state[m.key]}
+              delta={state[m.key] - baseline[m.key]}
               last={i === METRICS.length - 1}
               onAdjust={(d) => adjust(m.key, d)}
               onSet={(v) => setValue(m.key, v)}
@@ -265,12 +330,13 @@ function TitleBar() {
 type MetricRowProps = {
   def: MetricDef;
   value: number;
+  delta: number;
   last: boolean;
   onAdjust: (delta: number) => void;
   onSet: (value: number) => void;
 };
 
-function MetricRow({ def, value, last, onAdjust, onSet }: MetricRowProps) {
+function MetricRow({ def, value, delta, last, onAdjust, onSet }: MetricRowProps) {
   return (
     <div className={last ? "p-4" : "border-b border-green-900 p-4"}>
       {/* label row */}
@@ -282,8 +348,13 @@ function MetricRow({ def, value, last, onAdjust, onSet }: MetricRowProps) {
             // {def.jp} {def.note}
           </span>
         </p>
-        <span className="shrink-0 tabular-nums text-green-300">
-          {String(value).padStart(3, "0")}
+        <span className="flex shrink-0 items-baseline gap-2">
+          <span className={"tabular-nums text-xs " + deltaColor(delta)}>
+            [ {formatDelta(delta)} ]
+          </span>
+          <span className="tabular-nums text-green-300">
+            {String(value).padStart(3, "0")}
+          </span>
         </span>
       </div>
 
