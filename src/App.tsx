@@ -1,5 +1,6 @@
 import { useEffect, useMemo, useState } from "react";
 import { getCurrentWindow } from "@tauri-apps/api/window";
+import { calculateSystemIntegrity } from "./utils/calculator";
 
 const isTauri = typeof window !== "undefined" && "__TAURI_INTERNALS__" in window;
 
@@ -101,32 +102,7 @@ function asciiBar(value: number): string {
 }
 
 const ENTROPY_THRESHOLD = 50;
-const ENTROPY_TOXICITY_WEIGHT = 1.5;
 const DEPLETION_THRESHOLD = 20;
-const CRITICAL_DEBUFF = 0.5;
-
-// リービッヒの最小律に基づく非線形スコア算出。
-// 1) ベース（エントロピー除外の良性4指標平均）
-// 2) エントロピー毒性：50超過分に 1.5倍ペナルティ
-// 3) クリティカル枯渇：物理 or 精神 <=20 で最終スコア半減
-function computeIntegrity(s: MetricState): number {
-  const base =
-    (100 - s.cognitiveLoad + s.physicalEnergy + s.mentalEnergy + s.autonomy) / 4;
-
-  let score = base;
-  if (s.entropy > ENTROPY_THRESHOLD) {
-    score -= (s.entropy - ENTROPY_THRESHOLD) * ENTROPY_TOXICITY_WEIGHT;
-  }
-
-  if (
-    s.physicalEnergy <= DEPLETION_THRESHOLD ||
-    s.mentalEnergy <= DEPLETION_THRESHOLD
-  ) {
-    score *= CRITICAL_DEBUFF;
-  }
-
-  return clamp(score);
-}
 
 function formatDelta(delta: number, withPercent = false): string {
   const sign = delta >= 0 ? "+" : "-";
@@ -208,8 +184,8 @@ export default function App() {
 
   const reset = () => setState(DEFAULT_STATE);
 
-  const integrity = useMemo(() => computeIntegrity(state), [state]);
-  const baseIntegrity = useMemo(() => computeIntegrity(baseline), [baseline]);
+  const integrity = useMemo(() => calculateSystemIntegrity(state), [state]);
+  const baseIntegrity = useMemo(() => calculateSystemIntegrity(baseline), [baseline]);
   const integrityDelta = integrity - baseIntegrity;
   const diagnosis = useMemo(() => diagnose(state), [state]);
 
@@ -343,7 +319,8 @@ function MetricRow({ def, value, delta, last, onAdjust, onSet }: MetricRowProps)
       <div className="flex items-baseline justify-between gap-4">
         <p className="min-w-0 truncate">
           <span className="text-green-700">{def.index}.</span>{" "}
-          <span className="text-green-300">{def.label}</span>{" "}
+          <span className="text-green-300">{def.label}</span>
+          {def.inverse && <span> [INVERSE]</span>}{" "}
           <span className="text-green-800">
             // {def.jp} {def.note}
           </span>
