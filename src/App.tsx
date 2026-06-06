@@ -1,5 +1,7 @@
 import { useEffect, useMemo, useState } from "react";
 import { getCurrentWindow } from "@tauri-apps/api/window";
+import { createLog } from "./api/logs";
+import HistoryPanel from "./components/HistoryPanel";
 import { calculateSystemIntegrity } from "./utils/calculator";
 
 const isTauri = typeof window !== "undefined" && "__TAURI_INTERNALS__" in window;
@@ -162,6 +164,9 @@ export default function App() {
   const [baseline] = useState<MetricState>(loadState);
   const [translucent, setTranslucent] = useState<boolean>(loadTranslucent);
   const [now, setNow] = useState(formatSessionNow);
+  const [view, setView] = useState<"panel" | "history">("panel");
+  const [actionNote, setActionNote] = useState("");
+  const [commitStatus, setCommitStatus] = useState("");
 
   useEffect(() => {
     const id = setInterval(() => setNow(formatSessionNow()), 1000);
@@ -183,6 +188,27 @@ export default function App() {
     setState((prev) => ({ ...prev, [key]: clamp(prev[key] + delta) }));
 
   const reset = () => setState(DEFAULT_STATE);
+
+  const handleCommit = async () => {
+    setCommitStatus("> committing...");
+    try {
+      await createLog({
+        params: {
+          cognitive_load: state.cognitiveLoad,
+          physical_energy: state.physicalEnergy,
+          mental_energy: state.mentalEnergy,
+          autonomy: state.autonomy,
+          entropy: state.entropy,
+        },
+        note: actionNote,
+        timestamp: new Date().toISOString(),
+      });
+      setCommitStatus("> commit: ok");
+      setActionNote("");
+    } catch {
+      setCommitStatus("> [ERROR] COMMIT FAILED");
+    }
+  };
 
   const integrity = useMemo(() => calculateSystemIntegrity(state), [state]);
   const baseIntegrity = useMemo(() => calculateSystemIntegrity(baseline), [baseline]);
@@ -219,6 +245,36 @@ export default function App() {
         {/* ── Diagnostic log ─────────────────────── */}
         <p className={"mt-3 " + diagnosis.className}>{diagnosis.text}</p>
 
+        {/* ── View switch ────────────────────────── */}
+        <div className="mt-4 flex gap-2">
+          <button
+            onClick={() => setView("panel")}
+            className={
+              "border px-2 py-0.5 focus:outline-none " +
+              (view === "panel"
+                ? "border-green-500 bg-green-500 text-black"
+                : "border-green-700 text-green-500 hover:bg-green-500 hover:text-black")
+            }
+          >
+            [ PANEL ]
+          </button>
+          <button
+            onClick={() => setView("history")}
+            className={
+              "border px-2 py-0.5 focus:outline-none " +
+              (view === "history"
+                ? "border-green-500 bg-green-500 text-black"
+                : "border-green-700 text-green-500 hover:bg-green-500 hover:text-black")
+            }
+          >
+            [ HISTORY ]
+          </button>
+        </div>
+
+        {view === "history" ? (
+          <HistoryPanel />
+        ) : (
+          <>
         {/* ── Integrity ──────────────────────────── */}
         <section className="mt-6 border border-green-500 p-4">
           <p className="text-green-700">{"// SYSTEM INTEGRITY / 統合自律性スコア"}</p>
@@ -237,18 +293,40 @@ export default function App() {
 
         {/* ── Metrics ────────────────────────────── */}
         <main className="mt-6 border border-green-500">
-          {METRICS.map((m, i) => (
+          {METRICS.map((m) => (
             <MetricRow
               key={m.key}
               def={m}
               value={state[m.key]}
               delta={state[m.key] - baseline[m.key]}
-              last={i === METRICS.length - 1}
               onAdjust={(d) => adjust(m.key, d)}
               onSet={(v) => setValue(m.key, v)}
             />
           ))}
+          <section className="border-t border-green-900 p-4">
+            <p className="text-green-700">{"// ACTION LOG / 行動記録"}</p>
+            <input
+              type="text"
+              value={actionNote}
+              onChange={(e) => setActionNote(e.target.value)}
+              placeholder="変動のトリガーとなった行動を入力..."
+              className="mt-2 w-full border border-green-700 bg-black px-2 py-1 text-green-500 placeholder:text-green-900 focus:outline-none"
+            />
+            <div className="mt-3 flex items-center gap-3">
+              <button
+                onClick={handleCommit}
+                className="border border-green-500 px-3 py-0.5 text-green-500 hover:bg-green-500 hover:text-black focus:outline-none"
+              >
+                [ COMMIT ]
+              </button>
+              {commitStatus && (
+                <span className="text-green-800">{commitStatus}</span>
+              )}
+            </div>
+          </section>
         </main>
+          </>
+        )}
 
         {/* ── Footer ─────────────────────────────── */}
         <footer className="mt-6 flex items-center justify-between text-green-700">
@@ -307,14 +385,13 @@ type MetricRowProps = {
   def: MetricDef;
   value: number;
   delta: number;
-  last: boolean;
   onAdjust: (delta: number) => void;
   onSet: (value: number) => void;
 };
 
-function MetricRow({ def, value, delta, last, onAdjust, onSet }: MetricRowProps) {
+function MetricRow({ def, value, delta, onAdjust, onSet }: MetricRowProps) {
   return (
-    <div className={last ? "p-4" : "border-b border-green-900 p-4"}>
+    <div className="border-b border-green-900 p-4">
       {/* label row */}
       <div className="flex items-baseline justify-between gap-4">
         <p className="min-w-0 truncate">
