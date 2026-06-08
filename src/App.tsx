@@ -412,7 +412,7 @@ function MetricRow({ def, value, delta, onAdjust, onSet }: MetricRowProps) {
         </span>
       </div>
 
-      {/* gauge + controls */}
+      {/* gauge + step controls */}
       <div className="mt-2 flex items-center gap-3">
         <button
           aria-label={`decrease ${def.label}`}
@@ -422,7 +422,7 @@ function MetricRow({ def, value, delta, onAdjust, onSet }: MetricRowProps) {
           [-]
         </button>
 
-        <span className="whitespace-pre tracking-tight">
+        <span className="min-w-0 flex-1 truncate whitespace-pre tracking-tight">
           [{asciiBar(value)}]
         </span>
 
@@ -433,17 +433,18 @@ function MetricRow({ def, value, delta, onAdjust, onSet }: MetricRowProps) {
         >
           [+]
         </button>
-
-        <input
-          type="range"
-          min={0}
-          max={100}
-          value={value}
-          onChange={(e) => onSet(Number(e.target.value))}
-          aria-label={`${def.label} slider`}
-          className="slider h-px flex-1 cursor-pointer appearance-none bg-green-900"
-        />
       </div>
+
+      {/* slider (full width, below gauge) */}
+      <input
+        type="range"
+        min={0}
+        max={100}
+        value={value}
+        onChange={(e) => onSet(Number(e.target.value))}
+        aria-label={`${def.label} slider`}
+        className="slider mt-2 block h-px w-full cursor-pointer appearance-none bg-green-900"
+      />
     </div>
   );
 }

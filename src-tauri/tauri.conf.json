@@ -6,8 +6,8 @@
   "build": {
     "frontendDist": "../dist",
     "devUrl": "http://localhost:5173",
-    "beforeDevCommand": "npm run dev",
-    "beforeBuildCommand": "npm run build"
+    "beforeDevCommand": "powershell -ExecutionPolicy Bypass -File scripts/ensure-backend-resources.ps1 && npm run dev",
+    "beforeBuildCommand": "npm run build && powershell -ExecutionPolicy Bypass -File scripts/prepare-backend-bundle.ps1"
   },
   "app": {
     "windows": [
@@ -28,6 +28,9 @@
   "bundle": {
     "active": true,
     "targets": ["nsis", "msi"],
+    "resources": {
+      "resources/backend/": "backend/"
+    },
     "icon": [
       "icons/32x32.png",
       "icons/128x128.png",
