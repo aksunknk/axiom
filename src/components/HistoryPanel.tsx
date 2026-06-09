@@ -9,6 +9,7 @@ import {
   YAxis,
 } from "recharts";
 import { fetchLogs, type LogEntry } from "../api/logs";
+import CorrelationScatter from "./CorrelationScatter";
 
 const SERIES = [
   { key: "cognitive_load", label: "C", color: "#22c55e" },
@@ -156,6 +157,8 @@ export default function HistoryPanel() {
           [ EXPORT CSV ]
         </button>
       </div>
+
+      <CorrelationScatter logs={logs} />
     </section>
   );
 }
