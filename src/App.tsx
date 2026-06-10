@@ -159,6 +159,7 @@ function formatSessionNow(): string {
 }
 
 export default function App() {
+  const [isSafeMode, setIsSafeMode] = useState(false);
   const [state, setState] = useState<MetricState>(loadState);
   // 起動時（前回セーブ）のスナップショット。セッション差分(Delta)の基準。
   const [baseline] = useState<MetricState>(loadState);
@@ -226,21 +227,52 @@ export default function App() {
       <div className="mx-auto max-w-3xl px-4 py-10 text-sm leading-relaxed sm:px-6">
         {/* ── Header ─────────────────────────────── */}
         <header className="border border-green-500 p-4">
-          <p className="text-green-500">
-            <span className="text-green-700">{"> "}</span>
-            SYSTEM / INSTRUMENT PANEL{" "}
-            <span className="text-green-300">[AXIOM_v1.0]</span>
-          </p>
-          <p className="mt-1 text-green-700">
-            <span className="text-green-700">{"> "}</span>
-            session: {now}
-          </p>
-          <p className="mt-1 text-green-700">
-            <span className="text-green-700">{"> "}</span>
-            persistence: localStorage[{STORAGE_KEY}]{" "}
-            <span className="animate-pulse text-green-500">_</span>
-          </p>
+          <div className="flex items-start justify-between gap-3">
+            <div className="min-w-0 flex-1">
+              <p className="text-green-500">
+                <span className="text-green-700">{"> "}</span>
+                SYSTEM / INSTRUMENT PANEL{" "}
+                <span className="text-green-300">[AXIOM_v1.0]</span>
+              </p>
+              <p className="mt-1 text-green-700">
+                <span className="text-green-700">{"> "}</span>
+                session: {now}
+              </p>
+              <p className="mt-1 text-green-700">
+                <span className="text-green-700">{"> "}</span>
+                persistence: localStorage[{STORAGE_KEY}]{" "}
+                <span className="animate-pulse text-green-500">_</span>
+              </p>
+            </div>
+            <button
+              type="button"
+              onClick={() => setIsSafeMode((v) => !v)}
+              aria-pressed={isSafeMode}
+              className={
+                "shrink-0 border px-2 py-0.5 font-mono text-xs focus:outline-none " +
+                (isSafeMode
+                  ? "border-[#00ff41] bg-[#00ff41] text-black"
+                  : "border-[#00ff41] bg-transparent text-[#00ff41] hover:border-green-400")
+              }
+            >
+              {isSafeMode ? "[ MODE: SAFE_MODE ]" : "[ MODE: NORMAL ]"}
+            </button>
+          </div>
         </header>
+
+        {/* ── Graceful degradation status ────────── */}
+        <p
+          className={
+            "mt-3 px-2 py-1 font-mono text-xs " +
+            (isSafeMode
+              ? "animate-pulse bg-yellow-950/20 text-yellow-500"
+              : "bg-green-950/10 text-gray-500")
+          }
+        >
+          {isSafeMode
+            ? "> [ALERT] GRACEFUL DEGRADATION ACTIVATED. NON-LINEAR DEBUFFS PARSED TO ZERO. REST IS LOGICALLY JUSTIFIED."
+            : "> [STATUS] ALL SYSTEMS OPERATING WITHIN NORMAL PARAMETERS."}
+        </p>
 
         {/* ── Diagnostic log ─────────────────────── */}
         <p className={"mt-3 " + diagnosis.className}>{diagnosis.text}</p>
