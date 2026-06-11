@@ -1,5 +1,6 @@
-import { useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useState } from "react";
 import { getCurrentWindow } from "@tauri-apps/api/window";
+import { countEvents, createEvent } from "./api/events";
 import { createLog } from "./api/logs";
 import HistoryPanel from "./components/HistoryPanel";
 import { calculateSystemIntegrity } from "./utils/calculator";
@@ -162,17 +163,36 @@ export default function App() {
   const [isSafeMode, setIsSafeMode] = useState(false);
   const [state, setState] = useState<MetricState>(loadState);
   // 起動時（前回セーブ）のスナップショット。セッション差分(Delta)の基準。
-  const [baseline] = useState<MetricState>(loadState);
+  // 初回レンダーの state を共有し localStorage の二重パースを排除する。
+  const [baseline] = useState<MetricState>(() => state);
   const [translucent, setTranslucent] = useState<boolean>(loadTranslucent);
   const [now, setNow] = useState(formatSessionNow);
   const [view, setView] = useState<"panel" | "history">("panel");
   const [actionNote, setActionNote] = useState("");
   const [commitStatus, setCommitStatus] = useState("");
+  const [nottodoxPurgeCount, setNottodoxPurgeCount] = useState(0);
+
+  const integrityOpts = useMemo(
+    () => ({ safeMode: isSafeMode, nottodoxPurgeCount }),
+    [isSafeMode, nottodoxPurgeCount]
+  );
+
+  const refreshPurgeCount = useCallback(async () => {
+    try {
+      setNottodoxPurgeCount(await countEvents("nottodo_purge", 1));
+    } catch {
+      /* API未起動時は0のまま */
+    }
+  }, []);
 
   useEffect(() => {
     const id = setInterval(() => setNow(formatSessionNow()), 1000);
     return () => clearInterval(id);
   }, []);
+
+  useEffect(() => {
+    refreshPurgeCount();
+  }, [refreshPurgeCount]);
 
   useEffect(() => {
     localStorage.setItem(STORAGE_KEY, JSON.stringify(state));
@@ -211,10 +231,39 @@ export default function App() {
     }
   };
 
-  const integrity = useMemo(() => calculateSystemIntegrity(state), [state]);
-  const baseIntegrity = useMemo(() => calculateSystemIntegrity(baseline), [baseline]);
+  const integrity = useMemo(
+    () => calculateSystemIntegrity(state, integrityOpts),
+    [state, integrityOpts]
+  );
+  const baseIntegrity = useMemo(
+    () => calculateSystemIntegrity(baseline),
+    [baseline]
+  );
   const integrityDelta = integrity - baseIntegrity;
   const diagnosis = useMemo(() => diagnose(state), [state]);
+
+  const handleSafeModeToggle = () => {
+    const next = !isSafeMode;
+    setIsSafeMode(next);
+    createEvent({
+      kind: "safe_mode_toggle",
+      payload: { active: next },
+      timestamp: new Date().toISOString(),
+    }).catch(() => {});
+  };
+
+  const handleNottodoPurge = async () => {
+    try {
+      await createEvent({
+        kind: "nottodo_purge",
+        payload: {},
+        timestamp: new Date().toISOString(),
+      });
+      await refreshPurgeCount();
+    } catch {
+      /* silent: API未起動 */
+    }
+  };
 
   return (
     <div
@@ -246,7 +295,7 @@ export default function App() {
             </div>
             <button
               type="button"
-              onClick={() => setIsSafeMode((v) => !v)}
+              onClick={handleSafeModeToggle}
               aria-pressed={isSafeMode}
               className={
                 "shrink-0 border px-2 py-0.5 font-mono text-xs focus:outline-none " +
@@ -310,6 +359,11 @@ export default function App() {
         {/* ── Integrity ──────────────────────────── */}
         <section className="mt-6 border border-green-500 p-4">
           <p className="text-green-700">{"// SYSTEM INTEGRITY / 統合自律性スコア"}</p>
+          {nottodoxPurgeCount > 0 && (
+            <p className="mt-1 text-xs text-green-800">
+              {`> nottodo_purge today: ${String(nottodoxPurgeCount).padStart(2, "0")} | bonus: +${Math.min(nottodoxPurgeCount * 2, 10)}`}
+            </p>
+          )}
           <div className="mt-2 flex items-center gap-3">
             <span className="whitespace-pre tracking-tight">
               [{asciiBar(integrity)}]
@@ -361,13 +415,21 @@ export default function App() {
         )}
 
         {/* ── Footer ─────────────────────────────── */}
-        <footer className="mt-6 flex items-center justify-between text-green-700">
-          <button
-            onClick={() => setTranslucent((v) => !v)}
-            className="border border-green-700 px-2 py-0.5 text-green-500 hover:bg-green-500 hover:text-black focus:outline-none"
-          >
-            [OPACITY: {translucent ? "GLASS" : "SOLID"}]
-          </button>
+        <footer className="mt-6 flex flex-wrap items-center justify-between gap-2 text-green-700">
+          <div className="flex gap-2">
+            <button
+              onClick={() => setTranslucent((v) => !v)}
+              className="border border-green-700 px-2 py-0.5 text-green-500 hover:bg-green-500 hover:text-black focus:outline-none"
+            >
+              [OPACITY: {translucent ? "GLASS" : "SOLID"}]
+            </button>
+            <button
+              onClick={handleNottodoPurge}
+              className="border border-green-700 px-2 py-0.5 text-green-500 hover:bg-green-500 hover:text-black focus:outline-none"
+            >
+              [ NOTTODOT: PURGE ]
+            </button>
+          </div>
           <button
             onClick={reset}
             className="border border-green-700 px-2 py-0.5 text-green-500 hover:bg-green-500 hover:text-black focus:outline-none"

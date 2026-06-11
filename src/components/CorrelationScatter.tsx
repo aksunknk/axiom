@@ -1,6 +1,7 @@
 import { useMemo, useState } from "react";
 import {
   CartesianGrid,
+  ReferenceLine,
   ResponsiveContainer,
   Scatter,
   ScatterChart,
@@ -28,6 +29,8 @@ type ScatterPoint = {
 const AXIOM_GREEN = "#22c55e";
 const GRID_STROKE = "#14532d";
 const AXIS_STROKE = "#166534";
+/** 4象限分割の中間値。安全/警告領域の境界。 */
+const QUADRANT_MID = 50;
 
 const X_OPTIONS: { key: XAxisKey; label: string }[] = [
   { key: "mental_energy", label: "MENTAL_ENERGY" },
@@ -218,6 +221,18 @@ export default function CorrelationScatter({ logs }: CorrelationScatterProps) {
                   fontSize: 10,
                   fontFamily: "monospace",
                 }}
+              />
+              <ReferenceLine
+                x={QUADRANT_MID}
+                stroke={AXIS_STROKE}
+                strokeDasharray="3 3"
+                strokeWidth={1}
+              />
+              <ReferenceLine
+                y={QUADRANT_MID}
+                stroke={AXIS_STROKE}
+                strokeDasharray="3 3"
+                strokeWidth={1}
               />
               <Tooltip
                 cursor={{ strokeDasharray: "2 2", stroke: AXIOM_GREEN }}

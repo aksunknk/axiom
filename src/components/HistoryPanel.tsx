@@ -8,16 +8,39 @@ import {
   XAxis,
   YAxis,
 } from "recharts";
-import { fetchLogs, type LogEntry } from "../api/logs";
+import { fetchLogs, type LogEntry, type LogParams } from "../api/logs";
+import { isMetricAbnormal } from "../utils/thresholds";
 import CorrelationScatter from "./CorrelationScatter";
 
-const SERIES = [
-  { key: "cognitive_load", label: "C", color: "#22c55e" },
-  { key: "physical_energy", label: "P", color: "#4ade80" },
-  { key: "mental_energy", label: "M", color: "#86efac" },
-  { key: "autonomy", label: "A", color: "#16a34a" },
-  { key: "entropy", label: "E", color: "#15803d" },
-] as const;
+type MetricKey =
+  | "cognitive_load"
+  | "physical_energy"
+  | "mental_energy"
+  | "autonomy"
+  | "entropy";
+
+type VisibleMetrics = Record<MetricKey, boolean>;
+
+const SERIES: {
+  key: MetricKey;
+  legend: string;
+  short: string;
+  color: string;
+}[] = [
+  { key: "cognitive_load", legend: "COGNITIVE_LOAD", short: "COG", color: "#22c55e" },
+  { key: "physical_energy", legend: "PHYSICAL_ENERGY", short: "PHY", color: "#4ade80" },
+  { key: "mental_energy", legend: "MENTAL_ENERGY", short: "MEN", color: "#86efac" },
+  { key: "autonomy", legend: "AUTONOMY", short: "AUT", color: "#16a34a" },
+  { key: "entropy", legend: "ENTROPY", short: "ENT", color: "#15803d" },
+];
+
+const DEFAULT_VISIBLE: VisibleMetrics = {
+  cognitive_load: false,
+  physical_energy: false,
+  mental_energy: false,
+  autonomy: true,
+  entropy: false,
+};
 
 function formatAxisTime(iso: string): string {
   const d = new Date(iso);
@@ -29,6 +52,50 @@ function formatAxisTime(iso: string): string {
     minute: "2-digit",
     hour12: false,
   });
+}
+
+function formatListTime(iso: string): string {
+  const d = new Date(iso);
+  const pad = (n: number) => String(n).padStart(2, "0");
+  return `${pad(d.getMonth() + 1)}/${pad(d.getDate())} ${pad(d.getHours())}:${pad(d.getMinutes())}`;
+}
+
+function pad3(n: number): string {
+  return String(n).padStart(3, "0");
+}
+
+/** RECENT LOG の表示順とラベル。閾値超過時は数値のみアンバー表示。 */
+const RECENT_LOG_FIELDS: { key: keyof LogParams; label: string }[] = [
+  { key: "autonomy", label: "AUT" },
+  { key: "cognitive_load", label: "COG" },
+  { key: "physical_energy", label: "PHY" },
+  { key: "mental_energy", label: "MEN" },
+  { key: "entropy", label: "ENT" },
+];
+
+function RecentLogLine({ log }: { log: LogEntry }) {
+  return (
+    <li className="font-mono text-xs tabular-nums text-green-500">
+      {`> [${formatListTime(log.timestamp)}] `}
+      {RECENT_LOG_FIELDS.map((f, i) => {
+        const value = log.params[f.key];
+        return (
+          <span key={f.key}>
+            {f.label}
+            {": "}
+            <span
+              className={
+                isMetricAbnormal(f.key, value) ? "text-yellow-500" : undefined
+              }
+            >
+              {pad3(value)}
+            </span>
+            {i < RECENT_LOG_FIELDS.length - 1 && " | "}
+          </span>
+        );
+      })}
+    </li>
+  );
 }
 
 function logsToCsv(logs: LogEntry[]): string {
@@ -52,6 +119,8 @@ function logsToCsv(logs: LogEntry[]): string {
 export default function HistoryPanel() {
   const [logs, setLogs] = useState<LogEntry[]>([]);
   const [status, setStatus] = useState("> loading...");
+  const [visibleMetrics, setVisibleMetrics] =
+    useState<VisibleMetrics>(DEFAULT_VISIBLE);
 
   const load = useCallback(async () => {
     try {
@@ -79,6 +148,20 @@ export default function HistoryPanel() {
       })),
     [logs]
   );
+
+  const recentLogs = useMemo(
+    () =>
+      [...logs]
+        .sort(
+          (a, b) =>
+            new Date(b.timestamp).getTime() - new Date(a.timestamp).getTime()
+        )
+        .slice(0, 5),
+    [logs]
+  );
+
+  const toggleMetric = (key: MetricKey) =>
+    setVisibleMetrics((prev) => ({ ...prev, [key]: !prev[key] }));
 
   const exportCsv = async () => {
     try {
@@ -119,6 +202,7 @@ export default function HistoryPanel() {
                 stroke="#166534"
               />
               <Tooltip
+                isAnimationActive={false}
                 contentStyle={{
                   backgroundColor: "#000",
                   border: "1px solid #22c55e",
@@ -127,19 +211,56 @@ export default function HistoryPanel() {
                   color: "#22c55e",
                 }}
               />
-              {SERIES.map((s) => (
-                <Line
-                  key={s.key}
-                  type="monotone"
-                  dataKey={s.key}
-                  name={s.label}
-                  stroke={s.color}
-                  dot={false}
-                  strokeWidth={1}
-                />
-              ))}
+              {SERIES.map((s) =>
+                visibleMetrics[s.key] ? (
+                  <Line
+                    key={s.key}
+                    type="monotone"
+                    dataKey={s.key}
+                    name={s.short}
+                    stroke={s.color}
+                    dot={false}
+                    strokeWidth={1}
+                    isAnimationActive={false}
+                  />
+                ) : null
+              )}
             </LineChart>
           </ResponsiveContainer>
+        )}
+      </div>
+
+      {/* metric legend / toggle */}
+      <div className="mt-2 flex flex-wrap gap-2">
+        {SERIES.map((s) => (
+          <button
+            key={s.key}
+            type="button"
+            onClick={() => toggleMetric(s.key)}
+            aria-pressed={visibleMetrics[s.key]}
+            className={
+              "border px-2 py-0.5 font-mono text-xs focus:outline-none " +
+              (visibleMetrics[s.key]
+                ? "border-green-500 bg-green-500 text-black"
+                : "border-green-700 text-green-500 hover:bg-green-500 hover:text-black")
+            }
+          >
+            [{s.legend}]
+          </button>
+        ))}
+      </div>
+
+      {/* recent log list */}
+      <div className="mt-3 border border-green-900 bg-black px-2 py-2">
+        <p className="text-green-700">{"// RECENT LOG / 直近5件"}</p>
+        {recentLogs.length === 0 ? (
+          <p className="mt-1 text-green-800">{"> no data"}</p>
+        ) : (
+          <ul className="mt-1 space-y-0.5">
+            {recentLogs.map((log) => (
+              <RecentLogLine key={log.id} log={log} />
+            ))}
+          </ul>
         )}
       </div>
 

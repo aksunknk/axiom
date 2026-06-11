@@ -1,6 +1,8 @@
+import json
 from datetime import datetime
+from typing import Any
 
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict, Field, field_validator
 
 
 class ParamsSchema(BaseModel):
@@ -24,3 +26,25 @@ class LogRead(BaseModel):
     timestamp: datetime
     note: str
     params: ParamsSchema
+
+
+class EventCreate(BaseModel):
+    kind: str = Field(min_length=1, max_length=64)
+    payload: dict[str, Any] = Field(default_factory=dict)
+    timestamp: datetime
+
+
+class EventRead(BaseModel):
+    id: int
+    timestamp: datetime
+    kind: str
+    payload: dict[str, Any]
+
+    @field_validator("payload", mode="before")
+    @classmethod
+    def parse_payload(cls, v: Any) -> dict[str, Any]:
+        if isinstance(v, dict):
+            return v
+        if isinstance(v, str):
+            return json.loads(v) if v else {}
+        return {}
