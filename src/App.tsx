@@ -170,6 +170,8 @@ export default function App() {
   const [view, setView] = useState<"panel" | "history">("panel");
   const [actionNote, setActionNote] = useState("");
   const [commitStatus, setCommitStatus] = useState("");
+  const [purgeNote, setPurgeNote] = useState("");
+  const [purgeStatus, setPurgeStatus] = useState("");
   const [nottodoxPurgeCount, setNottodoxPurgeCount] = useState(0);
 
   const integrityOpts = useMemo(
@@ -253,15 +255,18 @@ export default function App() {
   };
 
   const handleNottodoPurge = async () => {
+    setPurgeStatus("> purging...");
     try {
       await createEvent({
         kind: "nottodo_purge",
-        payload: {},
+        payload: { note: purgeNote },
         timestamp: new Date().toISOString(),
       });
       await refreshPurgeCount();
+      setPurgeStatus("> purge: ok");
+      setPurgeNote("");
     } catch {
-      /* silent: API未起動 */
+      setPurgeStatus("> [ERROR] PURGE FAILED");
     }
   };
 
@@ -415,8 +420,27 @@ export default function App() {
         )}
 
         {/* ── Footer ─────────────────────────────── */}
-        <footer className="mt-6 flex flex-wrap items-center justify-between gap-2 text-green-700">
-          <div className="flex gap-2">
+        <footer className="mt-6 border border-green-500 p-4">
+          <p className="text-green-700">{"// NOTTODOT / 禁止事項パージ"}</p>
+          <input
+            type="text"
+            value={purgeNote}
+            onChange={(e) => setPurgeNote(e.target.value)}
+            placeholder="パージした禁止行動を入力..."
+            className="mt-2 w-full border border-green-700 bg-black px-2 py-1 text-green-500 placeholder:text-green-900 focus:outline-none"
+          />
+          <div className="mt-3 flex items-center gap-3">
+            <button
+              onClick={handleNottodoPurge}
+              className="border border-green-500 px-3 py-0.5 text-green-500 hover:bg-green-500 hover:text-black focus:outline-none"
+            >
+              [ NOTTODOT: PURGE ]
+            </button>
+            {purgeStatus && (
+              <span className="text-green-800">{purgeStatus}</span>
+            )}
+          </div>
+          <div className="mt-4 flex items-center justify-between gap-2 border-t border-green-900 pt-3">
             <button
               onClick={() => setTranslucent((v) => !v)}
               className="border border-green-700 px-2 py-0.5 text-green-500 hover:bg-green-500 hover:text-black focus:outline-none"
@@ -424,18 +448,12 @@ export default function App() {
               [OPACITY: {translucent ? "GLASS" : "SOLID"}]
             </button>
             <button
-              onClick={handleNottodoPurge}
+              onClick={reset}
               className="border border-green-700 px-2 py-0.5 text-green-500 hover:bg-green-500 hover:text-black focus:outline-none"
             >
-              [ NOTTODOT: PURGE ]
+              [RESET --default]
             </button>
           </div>
-          <button
-            onClick={reset}
-            className="border border-green-700 px-2 py-0.5 text-green-500 hover:bg-green-500 hover:text-black focus:outline-none"
-          >
-            [RESET --default]
-          </button>
         </footer>
       </div>
     </div>

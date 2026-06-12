@@ -8,9 +8,12 @@ import {
   XAxis,
   YAxis,
 } from "recharts";
+import { fetchEvents, type EventEntry, type EventKind } from "../api/events";
 import { fetchLogs, type LogEntry, type LogParams } from "../api/logs";
 import { isMetricAbnormal } from "../utils/thresholds";
 import CorrelationScatter from "./CorrelationScatter";
+
+const UNIFIED_LOG_LIMIT = 10;
 
 type MetricKey =
   | "cognitive_load"
@@ -73,27 +76,86 @@ const RECENT_LOG_FIELDS: { key: keyof LogParams; label: string }[] = [
   { key: "entropy", label: "ENT" },
 ];
 
-function RecentLogLine({ log }: { log: LogEntry }) {
+type UnifiedEntry =
+  | { type: "log"; id: number; timestamp: string; log: LogEntry }
+  | { type: "event"; id: number; timestamp: string; event: EventEntry };
+
+function mergeUnifiedEntries(
+  logs: LogEntry[],
+  events: EventEntry[]
+): UnifiedEntry[] {
+  const merged: UnifiedEntry[] = [
+    ...logs.map((log) => ({
+      type: "log" as const,
+      id: log.id,
+      timestamp: log.timestamp,
+      log,
+    })),
+    ...events.map((event) => ({
+      type: "event" as const,
+      id: event.id,
+      timestamp: event.timestamp,
+      event,
+    })),
+  ];
+  return merged
+    .sort(
+      (a, b) =>
+        new Date(b.timestamp).getTime() - new Date(a.timestamp).getTime()
+    )
+    .slice(0, UNIFIED_LOG_LIMIT);
+}
+
+function eventLabel(kind: EventKind): string {
+  switch (kind) {
+    case "nottodo_purge":
+      return "NOT-TO-DO PURGED";
+    case "safe_mode_toggle":
+      return "SAFE_MODE_TOGGLED";
+    case "violation":
+      return "VIOLATION";
+  }
+}
+
+function UnifiedLogLine({ entry }: { entry: UnifiedEntry }) {
+  const time = formatListTime(entry.timestamp);
+
+  if (entry.type === "log") {
+    const log = entry.log;
+    return (
+      <li className="font-mono text-xs tabular-nums text-green-500">
+        {`> [${time}] `}
+        {RECENT_LOG_FIELDS.map((f, i) => {
+          const value = log.params[f.key];
+          return (
+            <span key={f.key}>
+              {f.label}
+              {": "}
+              <span
+                className={
+                  isMetricAbnormal(f.key, value) ? "text-yellow-500" : undefined
+                }
+              >
+                {pad3(value)}
+              </span>
+              {i < RECENT_LOG_FIELDS.length - 1 && " | "}
+            </span>
+          );
+        })}
+      </li>
+    );
+  }
+
+  const { event } = entry;
+  const note =
+    typeof event.payload.note === "string" ? event.payload.note.trim() : "";
+
   return (
     <li className="font-mono text-xs tabular-nums text-green-500">
-      {`> [${formatListTime(log.timestamp)}] `}
-      {RECENT_LOG_FIELDS.map((f, i) => {
-        const value = log.params[f.key];
-        return (
-          <span key={f.key}>
-            {f.label}
-            {": "}
-            <span
-              className={
-                isMetricAbnormal(f.key, value) ? "text-yellow-500" : undefined
-              }
-            >
-              {pad3(value)}
-            </span>
-            {i < RECENT_LOG_FIELDS.length - 1 && " | "}
-          </span>
-        );
-      })}
+      {`> [${time}] `}
+      <span className="text-yellow-500">[*EVENT*]</span>
+      {` ${eventLabel(event.kind)}`}
+      {note && <span className="text-green-800">{` // ${note}`}</span>}
     </li>
   );
 }
@@ -118,15 +180,22 @@ function logsToCsv(logs: LogEntry[]): string {
 
 export default function HistoryPanel() {
   const [logs, setLogs] = useState<LogEntry[]>([]);
+  const [events, setEvents] = useState<EventEntry[]>([]);
   const [status, setStatus] = useState("> loading...");
   const [visibleMetrics, setVisibleMetrics] =
     useState<VisibleMetrics>(DEFAULT_VISIBLE);
 
   const load = useCallback(async () => {
     try {
-      const data = await fetchLogs(7);
-      setLogs(data);
-      setStatus(`> loaded ${data.length} records (7d)`);
+      const [logData, eventData] = await Promise.all([
+        fetchLogs(7),
+        fetchEvents({ days: 7 }),
+      ]);
+      setLogs(logData);
+      setEvents(eventData);
+      setStatus(
+        `> loaded logs=${logData.length} events=${eventData.length} (7d)`
+      );
     } catch {
       setStatus("> [ERROR] API UNREACHABLE");
     }
@@ -149,15 +218,9 @@ export default function HistoryPanel() {
     [logs]
   );
 
-  const recentLogs = useMemo(
-    () =>
-      [...logs]
-        .sort(
-          (a, b) =>
-            new Date(b.timestamp).getTime() - new Date(a.timestamp).getTime()
-        )
-        .slice(0, 5),
-    [logs]
+  const unifiedLog = useMemo(
+    () => mergeUnifiedEntries(logs, events),
+    [logs, events]
   );
 
   const toggleMetric = (key: MetricKey) =>
@@ -250,15 +313,20 @@ export default function HistoryPanel() {
         ))}
       </div>
 
-      {/* recent log list */}
+      {/* unified log: logs + events */}
       <div className="mt-3 border border-green-900 bg-black px-2 py-2">
-        <p className="text-green-700">{"// RECENT LOG / 直近5件"}</p>
-        {recentLogs.length === 0 ? (
+        <p className="text-green-700">
+          {`// UNIFIED LOG / 直近${UNIFIED_LOG_LIMIT}件`}
+        </p>
+        {unifiedLog.length === 0 ? (
           <p className="mt-1 text-green-800">{"> no data"}</p>
         ) : (
-          <ul className="mt-1 space-y-0.5">
-            {recentLogs.map((log) => (
-              <RecentLogLine key={log.id} log={log} />
+          <ul className="mt-1 max-h-40 space-y-0.5 overflow-y-auto">
+            {unifiedLog.map((entry) => (
+              <UnifiedLogLine
+                key={`${entry.type}-${entry.id}`}
+                entry={entry}
+              />
             ))}
           </ul>
         )}
