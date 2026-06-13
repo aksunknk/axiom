@@ -1,18 +1,56 @@
 import json
+import logging
+from contextlib import asynccontextmanager
 from datetime import datetime, timedelta, timezone
 
-from fastapi import Depends, FastAPI, Query
+from fastapi import BackgroundTasks, Depends, FastAPI, Query
 from fastapi.middleware.cors import CORSMiddleware
-from sqlalchemy import func
+from sqlalchemy import func, text
+from sqlalchemy.exc import OperationalError
 from sqlalchemy.orm import Session
 
 import models
 import schemas
 from database import Base, engine, get_db
+from llm.router import router as llm_router
+from llm.tasks import (
+    PENDING,
+    enrich_event_task,
+    enrich_log_task,
+    generate_safe_mode_rationale,
+)
+from llm_client import get_llm_client
+
+logger = logging.getLogger(__name__)
 
 Base.metadata.create_all(bind=engine)
 
-app = FastAPI(title="AXIOM Backend", version="1.0.0")
+
+def migrate_schema() -> None:
+    """既存 DB に logs.enrichment 列を追加する（冪等）。"""
+    with engine.connect() as conn:
+        try:
+            conn.execute(
+                text(
+                    "ALTER TABLE logs ADD COLUMN enrichment TEXT NOT NULL DEFAULT '{}'"
+                )
+            )
+            conn.commit()
+        except OperationalError:
+            conn.rollback()
+
+
+migrate_schema()
+
+
+@asynccontextmanager
+async def lifespan(_app: FastAPI):
+    yield
+    await get_llm_client().aclose()
+
+
+app = FastAPI(title="AXIOM Backend", version="1.0.0", lifespan=lifespan)
+app.include_router(llm_router)
 
 app.add_middleware(
     CORSMiddleware,
@@ -21,6 +59,26 @@ app.add_middleware(
     allow_methods=["*"],
     allow_headers=["*"],
 )
+
+
+def parse_enrichment(raw: str | None) -> schemas.EnrichmentState:
+    if not raw or raw == "{}":
+        return schemas.EnrichmentState(status="idle")
+    try:
+        data = json.loads(raw)
+    except json.JSONDecodeError:
+        return schemas.EnrichmentState(status="failed")
+    if not isinstance(data, dict):
+        return schemas.EnrichmentState(status="failed")
+    status = data.get("status", "pending")
+    payload = data.get("data")
+    enrichment_data = None
+    if isinstance(payload, dict) and status == "done":
+        try:
+            enrichment_data = schemas.EnrichmentData.model_validate(payload)
+        except Exception:
+            status = "failed"
+    return schemas.EnrichmentState(status=status, data=enrichment_data)
 
 
 def event_to_read(event: models.Event) -> schemas.EventRead:
@@ -44,7 +102,34 @@ def log_to_read(log: models.Log) -> schemas.LogRead:
             autonomy=log.autonomy,
             entropy=log.entropy,
         ),
+        enrichment=parse_enrichment(log.enrichment),
     )
+
+
+def schedule_log_enrichment(
+    background_tasks: BackgroundTasks,
+    log_id: int,
+    note: str,
+) -> None:
+    note = note.strip()
+    if not note:
+        return
+    background_tasks.add_task(enrich_log_task, log_id, note)
+
+
+def schedule_event_enrichment(
+    background_tasks: BackgroundTasks,
+    event_id: int,
+    kind: str,
+    payload: dict,
+) -> None:
+    if kind != "nottodo_purge":
+        return
+    note = payload.get("note")
+    if not isinstance(note, str) or not note.strip():
+        return
+    payload["llm"] = PENDING
+    background_tasks.add_task(enrich_event_task, event_id, note.strip())
 
 
 @app.get("/api/health")
@@ -55,9 +140,14 @@ def health() -> dict[str, str]:
 @app.post("/api/logs", response_model=schemas.LogRead, status_code=201)
 def create_log(
     payload: schemas.LogCreate,
+    background_tasks: BackgroundTasks,
     db: Session = Depends(get_db),
 ) -> schemas.LogRead:
     p = payload.params
+    note = payload.note.strip()
+    enrichment_json = (
+        json.dumps(PENDING, ensure_ascii=False) if note else json.dumps({}, ensure_ascii=False)
+    )
     log = models.Log(
         timestamp=payload.timestamp,
         note=payload.note,
@@ -66,10 +156,12 @@ def create_log(
         mental_energy=p.mental_energy,
         autonomy=p.autonomy,
         entropy=p.entropy,
+        enrichment=enrichment_json,
     )
     db.add(log)
     db.commit()
     db.refresh(log)
+    schedule_log_enrichment(background_tasks, log.id, note)
     return log_to_read(log)
 
 
@@ -89,16 +181,27 @@ def list_logs(
 @app.post("/api/events", response_model=schemas.EventRead, status_code=201)
 def create_event(
     payload: schemas.EventCreate,
+    background_tasks: BackgroundTasks,
     db: Session = Depends(get_db),
 ) -> schemas.EventRead:
+    event_payload = dict(payload.payload)
+    note = event_payload.get("note")
+    if (
+        payload.kind == "nottodo_purge"
+        and isinstance(note, str)
+        and note.strip()
+    ):
+        event_payload["llm"] = PENDING
+
     event = models.Event(
         timestamp=payload.timestamp,
         kind=payload.kind,
-        payload=json.dumps(payload.payload, ensure_ascii=False),
+        payload=json.dumps(event_payload, ensure_ascii=False),
     )
     db.add(event)
     db.commit()
     db.refresh(event)
+    schedule_event_enrichment(background_tasks, event.id, payload.kind, event_payload)
     return event_to_read(event)
 
 
@@ -131,3 +234,27 @@ def count_events(
         .scalar()
     )
     return {"count": count or 0}
+
+
+@app.post(
+    "/api/llm/safe-mode-rationale",
+    response_model=schemas.SafeModeRationaleResponse,
+)
+async def safe_mode_rationale(
+    body: schemas.SafeModeRationaleRequest,
+) -> schemas.SafeModeRationaleResponse:
+    """Nana: Safe Mode 正当化テキストを生成（失敗時 rationale=null）。"""
+    p = body.params
+    params = {
+        "cognitive_load": p.cognitive_load,
+        "physical_energy": p.physical_energy,
+        "mental_energy": p.mental_energy,
+        "autonomy": p.autonomy,
+        "entropy": p.entropy,
+    }
+    try:
+        rationale = await generate_safe_mode_rationale(params)
+    except Exception:
+        logger.exception("safe_mode_rationale failed")
+        rationale = None
+    return schemas.SafeModeRationaleResponse(rationale=rationale)

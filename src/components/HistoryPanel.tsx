@@ -8,12 +8,13 @@ import {
   XAxis,
   YAxis,
 } from "recharts";
-import { fetchEvents, type EventEntry, type EventKind } from "../api/events";
-import { fetchLogs, type LogEntry, type LogParams } from "../api/logs";
+import { fetchEvents, type EventEntry, type EventKind, type EventLlmState } from "../api/events";
+import { fetchLogs, type EnrichmentData, type LogEntry, type LogParams } from "../api/logs";
 import { isMetricAbnormal } from "../utils/thresholds";
 import CorrelationScatter from "./CorrelationScatter";
 
 const UNIFIED_LOG_LIMIT = 10;
+const ENRICH_POLL_INTERVAL_MS = 4_000;
 
 type MetricKey =
   | "cognitive_load"
@@ -117,31 +118,58 @@ function eventLabel(kind: EventKind): string {
   }
 }
 
+function formatLlmTag(data: EnrichmentData): string {
+  return `// LLM_TAG: [${data.category}] trigger: ${data.trigger}`;
+}
+
+function hasPendingEnrichment(logs: LogEntry[], events: EventEntry[]): boolean {
+  const logPending = logs.some((l) => l.enrichment?.status === "pending");
+  const eventPending = events.some(
+    (e) => e.payload.llm?.status === "pending"
+  );
+  return logPending || eventPending;
+}
+
+function LlmTagLine({ data }: { data: EnrichmentData }) {
+  return (
+    <p className="pl-4 font-mono text-xs text-gray-500">{formatLlmTag(data)}</p>
+  );
+}
+
 function UnifiedLogLine({ entry }: { entry: UnifiedEntry }) {
   const time = formatListTime(entry.timestamp);
 
   if (entry.type === "log") {
     const log = entry.log;
+    const enrichData =
+      log.enrichment?.status === "done" ? log.enrichment.data : null;
+
     return (
-      <li className="font-mono text-xs tabular-nums text-green-500">
-        {`> [${time}] `}
-        {RECENT_LOG_FIELDS.map((f, i) => {
-          const value = log.params[f.key];
-          return (
-            <span key={f.key}>
-              {f.label}
-              {": "}
-              <span
-                className={
-                  isMetricAbnormal(f.key, value) ? "text-yellow-500" : undefined
-                }
-              >
-                {pad3(value)}
+      <li>
+        <p className="font-mono text-xs tabular-nums text-green-500">
+          {`> [${time}] `}
+          {RECENT_LOG_FIELDS.map((f, i) => {
+            const value = log.params[f.key];
+            return (
+              <span key={f.key}>
+                {f.label}
+                {": "}
+                <span
+                  className={
+                    isMetricAbnormal(f.key, value) ? "text-yellow-500" : undefined
+                  }
+                >
+                  {pad3(value)}
+                </span>
+                {i < RECENT_LOG_FIELDS.length - 1 && " | "}
               </span>
-              {i < RECENT_LOG_FIELDS.length - 1 && " | "}
-            </span>
-          );
-        })}
+            );
+          })}
+          {log.note.trim() && (
+            <span className="text-green-800">{` // ${log.note.trim()}`}</span>
+          )}
+        </p>
+        {enrichData && <LlmTagLine data={enrichData} />}
       </li>
     );
   }
@@ -149,13 +177,18 @@ function UnifiedLogLine({ entry }: { entry: UnifiedEntry }) {
   const { event } = entry;
   const note =
     typeof event.payload.note === "string" ? event.payload.note.trim() : "";
+  const llm = event.payload.llm as EventLlmState | undefined;
+  const enrichData = llm?.status === "done" ? llm.data : null;
 
   return (
-    <li className="font-mono text-xs tabular-nums text-green-500">
-      {`> [${time}] `}
-      <span className="text-yellow-500">[*EVENT*]</span>
-      {` ${eventLabel(event.kind)}`}
-      {note && <span className="text-green-800">{` // ${note}`}</span>}
+    <li>
+      <p className="font-mono text-xs tabular-nums text-green-500">
+        {`> [${time}] `}
+        <span className="text-yellow-500">[*EVENT*]</span>
+        {` ${eventLabel(event.kind)}`}
+        {note && <span className="text-green-800">{` // ${note}`}</span>}
+      </p>
+      {enrichData && <LlmTagLine data={enrichData} />}
     </li>
   );
 }
@@ -204,6 +237,15 @@ export default function HistoryPanel() {
   useEffect(() => {
     load();
   }, [load]);
+
+  // エンリッチ pending がある間だけ静かに再取得（結果整合性）
+  useEffect(() => {
+    if (!hasPendingEnrichment(logs, events)) return;
+    const id = setInterval(() => {
+      load();
+    }, ENRICH_POLL_INTERVAL_MS);
+    return () => clearInterval(id);
+  }, [logs, events, load]);
 
   const chartData = useMemo(
     () =>

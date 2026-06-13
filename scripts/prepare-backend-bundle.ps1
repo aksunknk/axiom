@@ -15,6 +15,8 @@ Copy-Item (Join-Path $src "database.py") $dest
 Copy-Item (Join-Path $src "models.py") $dest
 Copy-Item (Join-Path $src "schemas.py") $dest
 Copy-Item (Join-Path $src "requirements.txt") $dest
+Copy-Item (Join-Path $src "llm_client.py") $dest
+Copy-Item -Recurse (Join-Path $src "llm") (Join-Path $dest "llm")
 
 $venv = Join-Path $dest ".venv"
 python -m venv $venv

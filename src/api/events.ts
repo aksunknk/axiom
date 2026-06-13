@@ -4,11 +4,23 @@ export type EventKind =
   | "nottodo_purge"
   | "violation";
 
+export type EventLlmState = {
+  status: "pending" | "done" | "failed";
+  data: {
+    trigger: string;
+    category: string;
+    impact: string[];
+  } | null;
+};
+
 export type EventEntry = {
   id: number;
   timestamp: string;
   kind: EventKind;
-  payload: Record<string, unknown>;
+  payload: Record<string, unknown> & {
+    note?: string;
+    llm?: EventLlmState;
+  };
 };
 
 export type EventCreatePayload = {

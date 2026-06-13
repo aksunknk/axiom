@@ -19,6 +19,17 @@ class LogCreate(BaseModel):
     timestamp: datetime
 
 
+class EnrichmentData(BaseModel):
+    trigger: str
+    category: str
+    impact: list[str] = Field(default_factory=list)
+
+
+class EnrichmentState(BaseModel):
+    status: str = "pending"
+    data: EnrichmentData | None = None
+
+
 class LogRead(BaseModel):
     model_config = ConfigDict(from_attributes=True)
 
@@ -26,6 +37,22 @@ class LogRead(BaseModel):
     timestamp: datetime
     note: str
     params: ParamsSchema
+    enrichment: EnrichmentState = Field(default_factory=EnrichmentState)
+
+
+class SafeModeRationaleRequest(BaseModel):
+    params: ParamsSchema
+
+
+class SafeModeRationaleResponse(BaseModel):
+    rationale: str | None = None
+
+
+class LLMPingResponse(BaseModel):
+    status: str
+    model: str | None = None
+    latency_ms: float | None = None
+    detail: str | None = None
 
 
 class EventCreate(BaseModel):

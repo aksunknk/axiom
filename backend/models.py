@@ -29,3 +29,4 @@ class Log(Base):
     mental_energy: Mapped[int] = mapped_column(Integer, nullable=False)
     autonomy: Mapped[int] = mapped_column(Integer, nullable=False)
     entropy: Mapped[int] = mapped_column(Integer, nullable=False)
+    enrichment: Mapped[str] = mapped_column(Text, nullable=False, default="{}")

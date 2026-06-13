@@ -6,11 +6,23 @@ export type LogParams = {
   entropy: number;
 };
 
+export type EnrichmentData = {
+  trigger: string;
+  category: string;
+  impact: string[];
+};
+
+export type EnrichmentState = {
+  status: "idle" | "pending" | "done" | "failed";
+  data: EnrichmentData | null;
+};
+
 export type LogEntry = {
   id: number;
   timestamp: string;
   note: string;
   params: LogParams;
+  enrichment?: EnrichmentState;
 };
 
 export type LogCreatePayload = {

@@ -1,6 +1,8 @@
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { getCurrentWindow } from "@tauri-apps/api/window";
 import { countEvents, createEvent } from "./api/events";
+import { checkHealth } from "./api/health";
+import { fetchSafeModeRationale, pingLLM } from "./api/llm";
 import { createLog } from "./api/logs";
 import HistoryPanel from "./components/HistoryPanel";
 import { calculateSystemIntegrity } from "./utils/calculator";
@@ -143,6 +145,22 @@ function loadTranslucent(): boolean {
   return localStorage.getItem(TRANSLUCENT_KEY) === "1";
 }
 
+/** バックエンド接続状態。READYまで通信系アクションをブロックする。 */
+type ApiStatus = "connecting" | "ready" | "offline";
+
+/** Mimi（LM Studio）心拍状態。記録機能とは独立。 */
+type MimiStatus = "idle" | "connecting" | "online" | "offline";
+
+const HEALTH_POLL_INTERVAL_MS = 1000;
+const HEALTH_POLL_MAX_ATTEMPTS = 15;
+const MIMI_POLL_INTERVAL_MS = 30_000;
+
+const SAFE_MODE_STATIC =
+  "> [ALERT] GRACEFUL DEGRADATION ACTIVATED. NON-LINEAR DEBUFFS PARSED TO ZERO. REST IS LOGICALLY JUSTIFIED.";
+const SAFE_MODE_LOADING = "> [SYSTEM] PARSING LOGICAL RATIONALE...";
+
+type RationalePhase = "idle" | "loading" | "dynamic" | "fallback";
+
 function formatSessionNow(): string {
   return new Date()
     .toLocaleString("ja-JP", {
@@ -173,6 +191,15 @@ export default function App() {
   const [purgeNote, setPurgeNote] = useState("");
   const [purgeStatus, setPurgeStatus] = useState("");
   const [nottodoxPurgeCount, setNottodoxPurgeCount] = useState(0);
+  const [apiStatus, setApiStatus] = useState<ApiStatus>("connecting");
+  const [mimiStatus, setMimiStatus] = useState<MimiStatus>("idle");
+  const [mimiLatencyMs, setMimiLatencyMs] = useState<number | null>(null);
+  // [ RETRY ] でポーリングを再開させるためのトリガー
+  const [healthEpoch, setHealthEpoch] = useState(0);
+  const [rationalePhase, setRationalePhase] = useState<RationalePhase>("idle");
+  const [rationaleText, setRationaleText] = useState("");
+  const rationaleRequestRef = useRef(0);
+  const apiReady = apiStatus === "ready";
 
   const integrityOpts = useMemo(
     () => ({ safeMode: isSafeMode, nottodoxPurgeCount }),
@@ -192,9 +219,73 @@ export default function App() {
     return () => clearInterval(id);
   }, []);
 
+  // バックエンド起動待機: /api/health を1秒間隔でポーリング（最大15回）。
+  // 200が返るまで COMMIT / PURGE 等の通信アクションをブロックする。
   useEffect(() => {
-    refreshPurgeCount();
-  }, [refreshPurgeCount]);
+    let cancelled = false;
+    let attempts = 0;
+    setApiStatus("connecting");
+
+    const poll = async () => {
+      if (cancelled) return;
+      if (await checkHealth()) {
+        if (!cancelled) setApiStatus("ready");
+        return;
+      }
+      attempts += 1;
+      if (attempts >= HEALTH_POLL_MAX_ATTEMPTS) {
+        if (!cancelled) setApiStatus("offline");
+        return;
+      }
+      setTimeout(poll, HEALTH_POLL_INTERVAL_MS);
+    };
+
+    poll();
+    return () => {
+      cancelled = true;
+    };
+  }, [healthEpoch]);
+
+  // Mimi 心拍: API_READY 後に疎通確認し、30秒間隔で再ポーリング。
+  // COMMIT/PURGE は Mimi 状態に依存しない（Graceful Degradation）。
+  useEffect(() => {
+    if (apiStatus !== "ready") {
+      setMimiStatus("idle");
+      setMimiLatencyMs(null);
+      return;
+    }
+
+    let cancelled = false;
+    let timer: ReturnType<typeof setTimeout> | undefined;
+
+    const pollMimi = async () => {
+      if (cancelled) return;
+      setMimiStatus((prev) => (prev === "online" ? prev : "connecting"));
+
+      const result = await pingLLM();
+      if (cancelled) return;
+
+      if (result.status === "ok") {
+        setMimiStatus("online");
+        setMimiLatencyMs(result.latency_ms);
+      } else {
+        setMimiStatus("offline");
+        setMimiLatencyMs(null);
+      }
+
+      timer = setTimeout(pollMimi, MIMI_POLL_INTERVAL_MS);
+    };
+
+    pollMimi();
+    return () => {
+      cancelled = true;
+      if (timer) clearTimeout(timer);
+    };
+  }, [apiStatus, healthEpoch]);
+
+  useEffect(() => {
+    if (apiReady) refreshPurgeCount();
+  }, [apiReady, refreshPurgeCount]);
 
   useEffect(() => {
     localStorage.setItem(STORAGE_KEY, JSON.stringify(state));
@@ -213,6 +304,10 @@ export default function App() {
   const reset = () => setState(DEFAULT_STATE);
 
   const handleCommit = async () => {
+    if (!apiReady) {
+      setCommitStatus("> [BLOCKED] API NOT READY");
+      return;
+    }
     setCommitStatus("> committing...");
     try {
       await createLog({
@@ -247,14 +342,56 @@ export default function App() {
   const handleSafeModeToggle = () => {
     const next = !isSafeMode;
     setIsSafeMode(next);
-    createEvent({
-      kind: "safe_mode_toggle",
-      payload: { active: next },
-      timestamp: new Date().toISOString(),
-    }).catch(() => {});
+
+    if (!next) {
+      setRationalePhase("idle");
+      setRationaleText("");
+      rationaleRequestRef.current += 1;
+    } else {
+      const requestId = rationaleRequestRef.current + 1;
+      rationaleRequestRef.current = requestId;
+      setRationalePhase("loading");
+      setRationaleText(SAFE_MODE_LOADING);
+
+      fetchSafeModeRationale({
+        cognitive_load: state.cognitiveLoad,
+        physical_energy: state.physicalEnergy,
+        mental_energy: state.mentalEnergy,
+        autonomy: state.autonomy,
+        entropy: state.entropy,
+      }).then((result) => {
+        if (rationaleRequestRef.current !== requestId) return;
+        if (result.rationale) {
+          setRationalePhase("dynamic");
+          setRationaleText(result.rationale);
+        } else {
+          setRationalePhase("fallback");
+          setRationaleText(SAFE_MODE_STATIC);
+        }
+      });
+    }
+
+    if (apiReady) {
+      createEvent({
+        kind: "safe_mode_toggle",
+        payload: { active: next },
+        timestamp: new Date().toISOString(),
+      }).catch(() => {});
+    }
   };
 
+  const safeModeDisplayText = useMemo(() => {
+    if (!isSafeMode) return "> [STATUS] ALL SYSTEMS OPERATING WITHIN NORMAL PARAMETERS.";
+    if (rationalePhase === "loading") return SAFE_MODE_LOADING;
+    if (rationalePhase === "dynamic" || rationalePhase === "fallback") return rationaleText;
+    return SAFE_MODE_STATIC;
+  }, [isSafeMode, rationalePhase, rationaleText]);
+
   const handleNottodoPurge = async () => {
+    if (!apiReady) {
+      setPurgeStatus("> [BLOCKED] API NOT READY");
+      return;
+    }
     setPurgeStatus("> purging...");
     try {
       await createEvent({
@@ -297,6 +434,50 @@ export default function App() {
                 persistence: localStorage[{STORAGE_KEY}]{" "}
                 <span className="animate-pulse text-green-500">_</span>
               </p>
+              <p className="mt-1">
+                <span className="text-green-700">{"> "}</span>
+                {apiStatus === "connecting" && (
+                  <span className="animate-pulse text-green-700">
+                    backend: CONNECTING...
+                  </span>
+                )}
+                {apiStatus === "ready" && (
+                  <span className="text-green-500">backend: API_READY</span>
+                )}
+                {apiStatus === "offline" && (
+                  <>
+                    <span className="text-red-500">
+                      backend: OFFLINE. COMMIT DISABLED.
+                    </span>{" "}
+                    <button
+                      type="button"
+                      onClick={() => setHealthEpoch((n) => n + 1)}
+                      className="border border-green-700 px-1 text-xs text-green-500 hover:bg-green-500 hover:text-black focus:outline-none"
+                    >
+                      [ RETRY ]
+                    </button>
+                  </>
+                )}
+              </p>
+              <p className="mt-1">
+                <span className="text-green-700">{"> "}</span>
+                {apiStatus !== "ready" && (
+                  <span className="text-green-800">mimi: STANDBY</span>
+                )}
+                {apiStatus === "ready" && mimiStatus === "connecting" && (
+                  <span className="animate-pulse text-green-700">
+                    mimi: CONNECTING...
+                  </span>
+                )}
+                {apiStatus === "ready" && mimiStatus === "online" && (
+                  <span className="text-green-500">
+                    {`mimi: ONLINE (${mimiLatencyMs?.toFixed(1) ?? "---"}ms)`}
+                  </span>
+                )}
+                {apiStatus === "ready" && mimiStatus === "offline" && (
+                  <span className="text-yellow-500">mimi: OFFLINE</span>
+                )}
+              </p>
             </div>
             <button
               type="button"
@@ -323,9 +504,7 @@ export default function App() {
               : "bg-green-950/10 text-gray-500")
           }
         >
-          {isSafeMode
-            ? "> [ALERT] GRACEFUL DEGRADATION ACTIVATED. NON-LINEAR DEBUFFS PARSED TO ZERO. REST IS LOGICALLY JUSTIFIED."
-            : "> [STATUS] ALL SYSTEMS OPERATING WITHIN NORMAL PARAMETERS."}
+          {safeModeDisplayText}
         </p>
 
         {/* ── Diagnostic log ─────────────────────── */}
@@ -406,9 +585,15 @@ export default function App() {
             <div className="mt-3 flex items-center gap-3">
               <button
                 onClick={handleCommit}
-                className="border border-green-500 px-3 py-0.5 text-green-500 hover:bg-green-500 hover:text-black focus:outline-none"
+                disabled={!apiReady}
+                className={
+                  "border px-3 py-0.5 focus:outline-none " +
+                  (apiReady
+                    ? "border-green-500 text-green-500 hover:bg-green-500 hover:text-black"
+                    : "cursor-not-allowed border-green-900 text-green-900")
+                }
               >
-                [ COMMIT ]
+                {apiReady ? "[ COMMIT ]" : "[ COMMIT: STANDBY ]"}
               </button>
               {commitStatus && (
                 <span className="text-green-800">{commitStatus}</span>
@@ -432,9 +617,15 @@ export default function App() {
           <div className="mt-3 flex items-center gap-3">
             <button
               onClick={handleNottodoPurge}
-              className="border border-green-500 px-3 py-0.5 text-green-500 hover:bg-green-500 hover:text-black focus:outline-none"
+              disabled={!apiReady}
+              className={
+                "border px-3 py-0.5 focus:outline-none " +
+                (apiReady
+                  ? "border-green-500 text-green-500 hover:bg-green-500 hover:text-black"
+                  : "cursor-not-allowed border-green-900 text-green-900")
+              }
             >
-              [ NOTTODOT: PURGE ]
+              {apiReady ? "[ NOTTODOT: PURGE ]" : "[ PURGE: STANDBY ]"}
             </button>
             {purgeStatus && (
               <span className="text-green-800">{purgeStatus}</span>
