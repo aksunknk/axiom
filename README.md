@@ -1,38 +1,38 @@
 # AXIOM
 
-Personal system monitor — track five biometrics-style metrics, compute **SYSTEM INTEGRITY**, and persist logs locally with optional LLM enrichment.
+個人用システムモニタ — 5つの生体指標を記録し、**SYSTEM INTEGRITY** を算出。ログをローカルに永続化し、任意で LLM による構造化も行います。
 
-![Main panel](docs/screenshots/panel.png)
+![メインパネル](docs/screenshots/panel.png)
 
-## Overview
+## 概要
 
-AXIOM is a CLI-aesthetic instrument panel for daily self-state tracking. It combines:
+AXIOM は CLI 美学の計器板 UI による日次自己状態トラッカーです。
 
-- **5 metrics** (0–100): Cognitive Load, Physical Energy, Mental Energy, Autonomy, Entropy
-- **SYSTEM INTEGRITY** — non-linear scoring with Safe Mode (graceful degradation) and Not-To-Do purge bonus
-- **FastAPI + SQLite** backend for logs and events
-- **History analytics** — time-series charts, correlation scatter, CSV export
-- **Local LLM (Mimi / Nana)** — optional note enrichment and Safe Mode rationale via LM Studio
+- **5指標**（0–100）: Cognitive Load（認知負荷）、Physical Energy（物理的体力）、Mental Energy（精神的体力）、Autonomy（自律統制率）、Entropy（エントロピー）
+- **SYSTEM INTEGRITY** — Safe Mode（Graceful Degradation）と Not-To-Do パージボーナスを含む非線形スコアリング
+- **FastAPI + SQLite** バックエンド — ログ・イベントの永続化
+- **履歴分析** — 時系列グラフ、相関散布図、CSV エクスポート
+- **ローカル LLM（Mimi / Nana）** — LM Studio 経由のノート構造化と Safe Mode 正当化テキスト生成（任意）
 
-| Screenshot | Description |
+| スクリーンショット | 説明 |
 |---|---|
-| [Panel](docs/screenshots/panel.png) | Main instrument panel |
-| [History](docs/screenshots/history.png) | Log timeline and charts |
-| [Safe Mode](docs/screenshots/safe-mode.png) | Graceful degradation toggle |
+| [Panel](docs/screenshots/panel.png) | メイン計器板 |
+| [History](docs/screenshots/history.png) | ログタイムラインとグラフ |
+| [Safe Mode](docs/screenshots/safe-mode.png) | Graceful Degradation トグル |
 
-## Tech Stack
+## 技術スタック
 
-| Layer | Stack |
+| レイヤ | 構成 |
 |---|---|
 | Frontend | React 18, TypeScript, Vite, Tailwind CSS, Recharts |
-| Desktop | Tauri 2 (Rust), frameless transparent window |
-| Mobile | Capacitor 8 (Android) |
+| Desktop | Tauri 2（Rust）、フレームレス透過ウィンドウ |
+| Mobile | Capacitor 8（Android） |
 | Backend | FastAPI, SQLAlchemy, SQLite |
-| LLM | LM Studio (OpenAI-compatible API), httpx async client |
+| LLM | LM Studio（OpenAI 互換 API）、httpx 非同期クライアント |
 
-## Quick Start
+## クイックスタート
 
-### Web (development)
+### Web（開発）
 
 ```powershell
 cd backend
@@ -40,53 +40,53 @@ python -m venv .venv
 .\.venv\Scripts\pip install -r requirements.txt
 .\.venv\Scripts\uvicorn main:app --reload --port 8000
 
-# separate terminal
+# 別ターミナル
 npm install
 npm run dev
 ```
 
-Open http://localhost:5173
+http://localhost:5173 を開く
 
-### Desktop (Tauri)
+### デスクトップ（Tauri）
 
 ```powershell
 npm run tauri dev
 ```
 
-### Production build
+### 本番ビルド
 
 ```powershell
 npm run tauri build
 ```
 
-Installer output: `src-tauri/target/release/bundle/`
+インストーラ出力: `src-tauri/target/release/bundle/`
 
-## Architecture
+## アーキテクチャ
 
 ```
 React UI (Vite)
     │  REST /api/logs, /api/events, /api/health, /api/llm/*
     ▼
 FastAPI + SQLite (axiom.db)
-    │  BackgroundTasks → Mimi enrichment (optional)
+    │  BackgroundTasks → Mimi enrichment（任意）
     ▼
-LM Studio :1234 (local, optional)
+LM Studio :1234（ローカル、任意）
 ```
 
-Tauri bundles the Python backend under `src-tauri/resources/backend/` via `scripts/prepare-backend-bundle.ps1`.
+Tauri は `scripts/prepare-backend-bundle.ps1` により Python バックエンドを `src-tauri/resources/backend/` に同梱します。
 
-## Key Features
+## 主な機能
 
-- **Safe Mode** — disables non-linear penalties when system resources are depleted
-- **COMMIT** — snapshot current metrics + note to SQLite
-- **PURGE (Not-To-Do)** — log discarded tasks; counts toward integrity bonus
-- **Mimi** — structures free-text notes into `{ trigger, category, impact[] }`
-- **Nana** — generates Safe Mode rationale text from current metrics
+- **Safe Mode** — リソース枯渇時に非線形ペナルティを無効化
+- **COMMIT** — 現在の指標とノートを SQLite にスナップショット保存
+- **PURGE（Not-To-Do）** — 破棄した禁止行動を記録し、スコアボーナスに反映
+- **Mimi** — 自由記述ノートを `{ trigger, category, impact[] }` に構造化
+- **Nana** — 現在の指標から Safe Mode 正当化テキストを生成
 
-## Repository
+## リポジトリ
 
 https://github.com/aksunknk/axiom
 
-## License
+## ライセンス
 
-Private / personal project.
+個人利用プロジェクト。
