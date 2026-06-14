@@ -5,7 +5,7 @@ export type EventKind =
   | "violation";
 
 export type EventLlmState = {
-  status: "pending" | "done" | "failed";
+  status: "queued" | "pending" | "done" | "failed";
   data: {
     trigger: string;
     category: string;

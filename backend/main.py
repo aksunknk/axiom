@@ -3,7 +3,7 @@ import logging
 from contextlib import asynccontextmanager
 from datetime import datetime, timedelta, timezone
 
-from fastapi import BackgroundTasks, Depends, FastAPI, Query
+from fastapi import Depends, FastAPI, Query
 from fastapi.middleware.cors import CORSMiddleware
 from sqlalchemy import func, text
 from sqlalchemy.exc import OperationalError
@@ -13,12 +13,7 @@ import models
 import schemas
 from database import Base, engine, get_db
 from llm.router import router as llm_router
-from llm.tasks import (
-    PENDING,
-    enrich_event_task,
-    enrich_log_task,
-    generate_safe_mode_rationale,
-)
+from llm.tasks import QUEUED
 from llm_client import get_llm_client
 
 logger = logging.getLogger(__name__)
@@ -106,30 +101,6 @@ def log_to_read(log: models.Log) -> schemas.LogRead:
     )
 
 
-def schedule_log_enrichment(
-    background_tasks: BackgroundTasks,
-    log_id: int,
-    note: str,
-) -> None:
-    note = note.strip()
-    if not note:
-        return
-    background_tasks.add_task(enrich_log_task, log_id, note)
-
-
-def schedule_event_enrichment(
-    background_tasks: BackgroundTasks,
-    event_id: int,
-    kind: str,
-    payload: dict,
-) -> None:
-    if kind != "nottodo_purge":
-        return
-    note = payload.get("note")
-    if not isinstance(note, str) or not note.strip():
-        return
-    payload["llm"] = PENDING
-    background_tasks.add_task(enrich_event_task, event_id, note.strip())
 
 
 @app.get("/api/health")
@@ -140,13 +111,12 @@ def health() -> dict[str, str]:
 @app.post("/api/logs", response_model=schemas.LogRead, status_code=201)
 def create_log(
     payload: schemas.LogCreate,
-    background_tasks: BackgroundTasks,
     db: Session = Depends(get_db),
 ) -> schemas.LogRead:
     p = payload.params
     note = payload.note.strip()
     enrichment_json = (
-        json.dumps(PENDING, ensure_ascii=False) if note else json.dumps({}, ensure_ascii=False)
+        json.dumps(QUEUED, ensure_ascii=False) if note else json.dumps({}, ensure_ascii=False)
     )
     log = models.Log(
         timestamp=payload.timestamp,
@@ -161,7 +131,6 @@ def create_log(
     db.add(log)
     db.commit()
     db.refresh(log)
-    schedule_log_enrichment(background_tasks, log.id, note)
     return log_to_read(log)
 
 
@@ -181,7 +150,6 @@ def list_logs(
 @app.post("/api/events", response_model=schemas.EventRead, status_code=201)
 def create_event(
     payload: schemas.EventCreate,
-    background_tasks: BackgroundTasks,
     db: Session = Depends(get_db),
 ) -> schemas.EventRead:
     event_payload = dict(payload.payload)
@@ -191,7 +159,7 @@ def create_event(
         and isinstance(note, str)
         and note.strip()
     ):
-        event_payload["llm"] = PENDING
+        event_payload["llm"] = QUEUED
 
     event = models.Event(
         timestamp=payload.timestamp,
@@ -201,7 +169,6 @@ def create_event(
     db.add(event)
     db.commit()
     db.refresh(event)
-    schedule_event_enrichment(background_tasks, event.id, payload.kind, event_payload)
     return event_to_read(event)
 
 
@@ -234,27 +201,3 @@ def count_events(
         .scalar()
     )
     return {"count": count or 0}
-
-
-@app.post(
-    "/api/llm/safe-mode-rationale",
-    response_model=schemas.SafeModeRationaleResponse,
-)
-async def safe_mode_rationale(
-    body: schemas.SafeModeRationaleRequest,
-) -> schemas.SafeModeRationaleResponse:
-    """Nana: Safe Mode 正当化テキストを生成（失敗時 rationale=null）。"""
-    p = body.params
-    params = {
-        "cognitive_load": p.cognitive_load,
-        "physical_energy": p.physical_energy,
-        "mental_energy": p.mental_energy,
-        "autonomy": p.autonomy,
-        "entropy": p.entropy,
-    }
-    try:
-        rationale = await generate_safe_mode_rationale(params)
-    except Exception:
-        logger.exception("safe_mode_rationale failed")
-        rationale = None
-    return schemas.SafeModeRationaleResponse(rationale=rationale)

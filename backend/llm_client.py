@@ -5,6 +5,7 @@ from __future__ import annotations
 import asyncio
 import json
 import logging
+import os
 import time
 from dataclasses import dataclass
 from typing import Any
@@ -24,6 +25,10 @@ DEFAULT_MAX_TOKENS = 256
 MAX_ALLOWED_TOKENS = 1024
 DEFAULT_TEMPERATURE = 0.2
 DEFAULT_TIMEOUT_SEC = 90.0
+INFERENCE_READ_TIMEOUT_SEC = 180.0
+INFERENCE_MAX_ATTEMPTS = 2
+DEFAULT_MODEL = os.environ.get("LM_STUDIO_MODEL", "google/gemma-4-12b")
+DEFAULT_NANA_MODEL = os.environ.get("LM_STUDIO_MODEL_NANA", DEFAULT_MODEL)
 CONNECT_TIMEOUT_SEC = 5.0
 
 DEFAULT_HTTP_TIMEOUT = httpx.Timeout(
@@ -144,11 +149,12 @@ class LMStudioClient:
         max_tokens: int | None = None,
         temperature: float = DEFAULT_TEMPERATURE,
         inject_mimi_baseline: bool = True,
+        model: str | None = None,
     ) -> str:
         """チャット補完を実行する。失敗時は LLMClientError を送出。"""
         payload_messages = ensure_mimi_system(messages) if inject_mimi_baseline else messages
         body = {
-            "model": "local-model",
+            "model": model or DEFAULT_MODEL,
             "messages": payload_messages,
             "temperature": temperature,
             "max_tokens": clamp_max_tokens(max_tokens or self._default_max_tokens),
@@ -156,18 +162,47 @@ class LMStudioClient:
             # Gemma 4 等: 推論トークンを content ではなく reasoning_content に消費するのを抑制
             "reasoning_effort": "none",
         }
+        inference_timeout = httpx.Timeout(
+            connect=CONNECT_TIMEOUT_SEC,
+            read=INFERENCE_READ_TIMEOUT_SEC,
+            write=10.0,
+            pool=5.0,
+        )
 
         client = await self._get_client()
-        try:
-            response = await client.post("/chat/completions", json=body)
-            response.raise_for_status()
-            data = response.json()
-        except httpx.TimeoutException as exc:
-            raise LLMTimeoutError("LM Studio request timed out") from exc
-        except httpx.HTTPError as exc:
-            raise LLMConnectionError("LM Studio connection failed") from exc
-        except json.JSONDecodeError as exc:
-            raise LLMResponseError("LM Studio returned invalid JSON") from exc
+        last_exc: Exception | None = None
+        for attempt in range(1, INFERENCE_MAX_ATTEMPTS + 1):
+            try:
+                response = await client.post(
+                    "/chat/completions",
+                    json=body,
+                    timeout=inference_timeout,
+                )
+                response.raise_for_status()
+                data = response.json()
+                break
+            except httpx.TimeoutException as exc:
+                last_exc = LLMTimeoutError("LM Studio request timed out")
+                logger.warning(
+                    "LM Studio chat timeout (attempt %s/%s)",
+                    attempt,
+                    INFERENCE_MAX_ATTEMPTS,
+                )
+            except httpx.HTTPError as exc:
+                last_exc = LLMConnectionError("LM Studio connection failed")
+                logger.warning(
+                    "LM Studio chat connection failed (attempt %s/%s): %s",
+                    attempt,
+                    INFERENCE_MAX_ATTEMPTS,
+                    exc,
+                )
+            except json.JSONDecodeError as exc:
+                raise LLMResponseError("LM Studio returned invalid JSON") from exc
+            if attempt < INFERENCE_MAX_ATTEMPTS:
+                await asyncio.sleep(2.0)
+        else:
+            assert last_exc is not None
+            raise last_exc
 
         try:
             message = data["choices"][0]["message"]
@@ -233,6 +268,7 @@ async def chat_completion(
     max_tokens: int | None = None,
     temperature: float = DEFAULT_TEMPERATURE,
     inject_mimi_baseline: bool = True,
+    model: str | None = None,
 ) -> str | None:
     """非同期チャット補完。失敗時は None（既存タスク互換）。"""
     try:
@@ -241,6 +277,7 @@ async def chat_completion(
             max_tokens=max_tokens,
             temperature=temperature,
             inject_mimi_baseline=inject_mimi_baseline,
+            model=model,
         )
     except LLMClientError as exc:
         logger.warning("LM Studio request failed: %s", exc)

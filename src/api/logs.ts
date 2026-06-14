@@ -13,7 +13,7 @@ export type EnrichmentData = {
 };
 
 export type EnrichmentState = {
-  status: "idle" | "pending" | "done" | "failed";
+  status: "idle" | "queued" | "pending" | "done" | "failed";
   data: EnrichmentData | null;
 };
 

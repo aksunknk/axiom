@@ -42,6 +42,9 @@ class LogRead(BaseModel):
 
 class SafeModeRationaleRequest(BaseModel):
     params: ParamsSchema
+    integrity: int | None = Field(default=None, ge=0, le=100)
+    integrity_delta: int | None = Field(default=None, ge=-100, le=100)
+    diagnosis: str | None = Field(default=None, max_length=200)
 
 
 class SafeModeRationaleResponse(BaseModel):
@@ -53,6 +56,17 @@ class LLMPingResponse(BaseModel):
     model: str | None = None
     latency_ms: float | None = None
     detail: str | None = None
+
+
+class EnrichQueueResponse(BaseModel):
+    count: int
+
+
+class EnrichBatchResponse(BaseModel):
+    queued_before: int
+    processed: int
+    done: int
+    requeued: int
 
 
 class EventCreate(BaseModel):

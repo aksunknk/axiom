@@ -12,8 +12,9 @@ if (Test-Path (Join-Path $dest "main.py")) {
 }
 
 New-Item -ItemType Directory -Path $dest -Force | Out-Null
-foreach ($file in @("main.py", "database.py", "models.py", "schemas.py", "requirements.txt")) {
+foreach ($file in @("main.py", "database.py", "models.py", "schemas.py", "requirements.txt", "llm_client.py")) {
     Copy-Item (Join-Path $src $file) $dest
 }
+Copy-Item -Recurse (Join-Path $src "llm") (Join-Path $dest "llm")
 
 Write-Output "backend resources stub ready: $dest"

@@ -2,7 +2,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { getCurrentWindow } from "@tauri-apps/api/window";
 import { countEvents, createEvent } from "./api/events";
 import { checkHealth } from "./api/health";
-import { fetchSafeModeRationale, pingLLM } from "./api/llm";
+import { fetchSafeModeRationale } from "./api/llm";
 import { createLog } from "./api/logs";
 import HistoryPanel from "./components/HistoryPanel";
 import { calculateSystemIntegrity } from "./utils/calculator";
@@ -148,16 +148,13 @@ function loadTranslucent(): boolean {
 /** バックエンド接続状態。READYまで通信系アクションをブロックする。 */
 type ApiStatus = "connecting" | "ready" | "offline";
 
-/** Mimi（LM Studio）心拍状態。記録機能とは独立。 */
-type MimiStatus = "idle" | "connecting" | "online" | "offline";
-
 const HEALTH_POLL_INTERVAL_MS = 1000;
 const HEALTH_POLL_MAX_ATTEMPTS = 15;
-const MIMI_POLL_INTERVAL_MS = 30_000;
 
 const SAFE_MODE_STATIC =
-  "> [ALERT] GRACEFUL DEGRADATION ACTIVATED. NON-LINEAR DEBUFFS PARSED TO ZERO. REST IS LOGICALLY JUSTIFIED.";
-const SAFE_MODE_LOADING = "> [SYSTEM] PARSING LOGICAL RATIONALE...";
+  "> [RATIONALE] GRACEFUL DEGRADATION ACTIVATED. NON-LINEAR DEBUFFS PARSED TO ZERO. REST IS LOGICALLY JUSTIFIED.\n" +
+  "> [ACTION] 椅子に寄りかかり、肩の力を抜いて3回深呼吸する。";
+const SAFE_MODE_LOADING = "> [SYSTEM] NANA: SYNTHESIZING RATIONALE...";
 
 type RationalePhase = "idle" | "loading" | "dynamic" | "fallback";
 
@@ -192,8 +189,6 @@ export default function App() {
   const [purgeStatus, setPurgeStatus] = useState("");
   const [nottodoxPurgeCount, setNottodoxPurgeCount] = useState(0);
   const [apiStatus, setApiStatus] = useState<ApiStatus>("connecting");
-  const [mimiStatus, setMimiStatus] = useState<MimiStatus>("idle");
-  const [mimiLatencyMs, setMimiLatencyMs] = useState<number | null>(null);
   // [ RETRY ] でポーリングを再開させるためのトリガー
   const [healthEpoch, setHealthEpoch] = useState(0);
   const [rationalePhase, setRationalePhase] = useState<RationalePhase>("idle");
@@ -245,43 +240,6 @@ export default function App() {
       cancelled = true;
     };
   }, [healthEpoch]);
-
-  // Mimi 心拍: API_READY 後に疎通確認し、30秒間隔で再ポーリング。
-  // COMMIT/PURGE は Mimi 状態に依存しない（Graceful Degradation）。
-  useEffect(() => {
-    if (apiStatus !== "ready") {
-      setMimiStatus("idle");
-      setMimiLatencyMs(null);
-      return;
-    }
-
-    let cancelled = false;
-    let timer: ReturnType<typeof setTimeout> | undefined;
-
-    const pollMimi = async () => {
-      if (cancelled) return;
-      setMimiStatus((prev) => (prev === "online" ? prev : "connecting"));
-
-      const result = await pingLLM();
-      if (cancelled) return;
-
-      if (result.status === "ok") {
-        setMimiStatus("online");
-        setMimiLatencyMs(result.latency_ms);
-      } else {
-        setMimiStatus("offline");
-        setMimiLatencyMs(null);
-      }
-
-      timer = setTimeout(pollMimi, MIMI_POLL_INTERVAL_MS);
-    };
-
-    pollMimi();
-    return () => {
-      cancelled = true;
-      if (timer) clearTimeout(timer);
-    };
-  }, [apiStatus, healthEpoch]);
 
   useEffect(() => {
     if (apiReady) refreshPurgeCount();
@@ -354,11 +312,16 @@ export default function App() {
       setRationaleText(SAFE_MODE_LOADING);
 
       fetchSafeModeRationale({
-        cognitive_load: state.cognitiveLoad,
-        physical_energy: state.physicalEnergy,
-        mental_energy: state.mentalEnergy,
-        autonomy: state.autonomy,
-        entropy: state.entropy,
+        params: {
+          cognitive_load: state.cognitiveLoad,
+          physical_energy: state.physicalEnergy,
+          mental_energy: state.mentalEnergy,
+          autonomy: state.autonomy,
+          entropy: state.entropy,
+        },
+        integrity,
+        integrity_delta: integrityDelta,
+        diagnosis: diagnosis.text,
       }).then((result) => {
         if (rationaleRequestRef.current !== requestId) return;
         if (result.rationale) {
@@ -459,25 +422,6 @@ export default function App() {
                   </>
                 )}
               </p>
-              <p className="mt-1">
-                <span className="text-green-700">{"> "}</span>
-                {apiStatus !== "ready" && (
-                  <span className="text-green-800">mimi: STANDBY</span>
-                )}
-                {apiStatus === "ready" && mimiStatus === "connecting" && (
-                  <span className="animate-pulse text-green-700">
-                    mimi: CONNECTING...
-                  </span>
-                )}
-                {apiStatus === "ready" && mimiStatus === "online" && (
-                  <span className="text-green-500">
-                    {`mimi: ONLINE (${mimiLatencyMs?.toFixed(1) ?? "---"}ms)`}
-                  </span>
-                )}
-                {apiStatus === "ready" && mimiStatus === "offline" && (
-                  <span className="text-yellow-500">mimi: OFFLINE</span>
-                )}
-              </p>
             </div>
             <button
               type="button"
@@ -498,7 +442,7 @@ export default function App() {
         {/* ── Graceful degradation status ────────── */}
         <p
           className={
-            "mt-3 px-2 py-1 font-mono text-xs " +
+            "mt-3 whitespace-pre-line px-2 py-1 font-mono text-xs " +
             (isSafeMode
               ? "animate-pulse bg-yellow-950/20 text-yellow-500"
               : "bg-green-950/10 text-gray-500")
@@ -537,7 +481,7 @@ export default function App() {
         </div>
 
         {view === "history" ? (
-          <HistoryPanel />
+          <HistoryPanel apiReady={apiReady} />
         ) : (
           <>
         {/* ── Integrity ──────────────────────────── */}

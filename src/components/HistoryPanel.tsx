@@ -8,13 +8,19 @@ import {
   XAxis,
   YAxis,
 } from "recharts";
+import { fetchEnrichQueueCount, runEnrichBatch } from "../api/llm";
 import { fetchEvents, type EventEntry, type EventKind, type EventLlmState } from "../api/events";
 import { fetchLogs, type EnrichmentData, type LogEntry, type LogParams } from "../api/logs";
 import { isMetricAbnormal } from "../utils/thresholds";
 import CorrelationScatter from "./CorrelationScatter";
 
 const UNIFIED_LOG_LIMIT = 10;
-const ENRICH_POLL_INTERVAL_MS = 4_000;
+
+const QUEUED_STATUSES = new Set(["queued", "pending", "failed"]);
+
+type HistoryPanelProps = {
+  apiReady?: boolean;
+};
 
 type MetricKey =
   | "cognitive_load"
@@ -122,12 +128,18 @@ function formatLlmTag(data: EnrichmentData): string {
   return `// LLM_TAG: [${data.category}] trigger: ${data.trigger}`;
 }
 
-function hasPendingEnrichment(logs: LogEntry[], events: EventEntry[]): boolean {
-  const logPending = logs.some((l) => l.enrichment?.status === "pending");
-  const eventPending = events.some(
-    (e) => e.payload.llm?.status === "pending"
-  );
-  return logPending || eventPending;
+function isQueuedLog(log: LogEntry): boolean {
+  const status = log.enrichment?.status;
+  return Boolean(log.note.trim() && status && QUEUED_STATUSES.has(status));
+}
+
+function isQueuedEvent(event: EventEntry): boolean {
+  const note =
+    typeof event.payload.note === "string" ? event.payload.note.trim() : "";
+  if (!note) return false;
+  const llm = event.payload.llm as EventLlmState | undefined;
+  if (!llm) return event.kind === "nottodo_purge";
+  return QUEUED_STATUSES.has(llm.status);
 }
 
 function LlmTagLine({ data }: { data: EnrichmentData }) {
@@ -143,6 +155,7 @@ function UnifiedLogLine({ entry }: { entry: UnifiedEntry }) {
     const log = entry.log;
     const enrichData =
       log.enrichment?.status === "done" ? log.enrichment.data : null;
+    const showQueued = isQueuedLog(log);
 
     return (
       <li>
@@ -169,6 +182,9 @@ function UnifiedLogLine({ entry }: { entry: UnifiedEntry }) {
             <span className="text-green-800">{` // ${log.note.trim()}`}</span>
           )}
         </p>
+        {showQueued && (
+          <p className="pl-4 font-mono text-xs text-gray-600">// LLM: QUEUED</p>
+        )}
         {enrichData && <LlmTagLine data={enrichData} />}
       </li>
     );
@@ -179,6 +195,7 @@ function UnifiedLogLine({ entry }: { entry: UnifiedEntry }) {
     typeof event.payload.note === "string" ? event.payload.note.trim() : "";
   const llm = event.payload.llm as EventLlmState | undefined;
   const enrichData = llm?.status === "done" ? llm.data : null;
+  const showQueued = isQueuedEvent(event);
 
   return (
     <li>
@@ -188,6 +205,9 @@ function UnifiedLogLine({ entry }: { entry: UnifiedEntry }) {
         {` ${eventLabel(event.kind)}`}
         {note && <span className="text-green-800">{` // ${note}`}</span>}
       </p>
+      {showQueued && (
+        <p className="pl-4 font-mono text-xs text-gray-600">// LLM: QUEUED</p>
+      )}
       {enrichData && <LlmTagLine data={enrichData} />}
     </li>
   );
@@ -211,12 +231,22 @@ function logsToCsv(logs: LogEntry[]): string {
   return [header, ...rows].join("\n");
 }
 
-export default function HistoryPanel() {
+export default function HistoryPanel({ apiReady = false }: HistoryPanelProps) {
   const [logs, setLogs] = useState<LogEntry[]>([]);
   const [events, setEvents] = useState<EventEntry[]>([]);
   const [status, setStatus] = useState("> loading...");
+  const [queueCount, setQueueCount] = useState(0);
+  const [enriching, setEnriching] = useState(false);
   const [visibleMetrics, setVisibleMetrics] =
     useState<VisibleMetrics>(DEFAULT_VISIBLE);
+
+  const refreshQueueCount = useCallback(async () => {
+    if (!apiReady) {
+      setQueueCount(0);
+      return;
+    }
+    setQueueCount((await fetchEnrichQueueCount(7)).count);
+  }, [apiReady]);
 
   const load = useCallback(async () => {
     try {
@@ -229,23 +259,31 @@ export default function HistoryPanel() {
       setStatus(
         `> loaded logs=${logData.length} events=${eventData.length} (7d)`
       );
+      await refreshQueueCount();
     } catch {
       setStatus("> [ERROR] API UNREACHABLE");
     }
-  }, []);
+  }, [refreshQueueCount]);
 
   useEffect(() => {
     load();
   }, [load]);
 
-  // エンリッチ pending がある間だけ静かに再取得（結果整合性）
-  useEffect(() => {
-    if (!hasPendingEnrichment(logs, events)) return;
-    const id = setInterval(() => {
-      load();
-    }, ENRICH_POLL_INTERVAL_MS);
-    return () => clearInterval(id);
-  }, [logs, events, load]);
+  const runEnrich = async () => {
+    if (!apiReady || enriching) return;
+    setEnriching(true);
+    setStatus("> [SYSTEM] MIMI BATCH ENRICH IN PROGRESS...");
+    const result = await runEnrichBatch(7);
+    if (!result) {
+      setStatus("> [ERROR] ENRICH BATCH FAILED (LM STUDIO?)");
+    } else {
+      setStatus(
+        `> enrich: done=${result.done} requeued=${result.requeued} / ${result.processed}`
+      );
+    }
+    setEnriching(false);
+    await load();
+  };
 
   const chartData = useMemo(
     () =>
@@ -374,12 +412,26 @@ export default function HistoryPanel() {
         )}
       </div>
 
-      <div className="mt-4 flex gap-3">
+      <div className="mt-4 flex flex-wrap gap-3">
         <button
           onClick={load}
           className="border border-green-700 px-2 py-0.5 text-green-500 hover:bg-green-500 hover:text-black focus:outline-none"
         >
           [ REFRESH ]
+        </button>
+        <button
+          onClick={runEnrich}
+          disabled={!apiReady || enriching || queueCount === 0}
+          className={
+            "border px-2 py-0.5 focus:outline-none " +
+            (apiReady && !enriching && queueCount > 0
+              ? "border-green-500 text-green-500 hover:bg-green-500 hover:text-black"
+              : "cursor-not-allowed border-green-900 text-green-900")
+          }
+        >
+          {enriching
+            ? "[ ENRICH: RUNNING ]"
+            : `[ ENRICH: ${String(queueCount).padStart(2, "0")} ]`}
         </button>
         <button
           onClick={exportCsv}
