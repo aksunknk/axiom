@@ -1,3 +1,5 @@
+import { apiFetch, API_BASE } from "./http";
+
 export type LogParams = {
   cognitive_load: number;
   physical_energy: number;
@@ -31,10 +33,8 @@ export type LogCreatePayload = {
   timestamp: string;
 };
 
-const API_BASE = import.meta.env.VITE_API_BASE ?? "http://127.0.0.1:8000";
-
 export async function createLog(payload: LogCreatePayload): Promise<LogEntry> {
-  const res = await fetch(`${API_BASE}/api/logs`, {
+  const res = await apiFetch(`${API_BASE}/api/logs`, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify(payload),
@@ -45,7 +45,7 @@ export async function createLog(payload: LogCreatePayload): Promise<LogEntry> {
 
 export async function fetchLogs(days?: number): Promise<LogEntry[]> {
   const qs = days != null ? `?days=${days}` : "";
-  const res = await fetch(`${API_BASE}/api/logs${qs}`);
+  const res = await apiFetch(`${API_BASE}/api/logs${qs}`);
   if (!res.ok) throw new Error(`GET /api/logs failed: ${res.status}`);
   return res.json();
 }

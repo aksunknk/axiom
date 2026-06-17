@@ -56,6 +56,14 @@ app.add_middleware(
 )
 
 
+@app.middleware("http")
+async def allow_private_network_access(request, call_next):
+    """Tauri WebView (https://tauri.localhost) からの POST プリフライト用。"""
+    response = await call_next(request)
+    response.headers["Access-Control-Allow-Private-Network"] = "true"
+    return response
+
+
 def parse_enrichment(raw: str | None) -> schemas.EnrichmentState:
     if not raw or raw == "{}":
         return schemas.EnrichmentState(status="idle")

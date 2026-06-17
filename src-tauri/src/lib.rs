@@ -6,6 +6,7 @@ use tauri::{Manager, RunEvent};
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     tauri::Builder::default()
+        .plugin(tauri_plugin_http::init())
         .manage(BackendServer::new())
         .setup(|app| {
             if cfg!(debug_assertions) {
@@ -15,7 +16,8 @@ pub fn run() {
                         .build(),
                 )?;
             }
-            BackendServer::start(app.handle());
+            let handle = app.handle().clone();
+            std::thread::spawn(move || BackendServer::start(&handle));
             Ok(())
         })
         .build(tauri::generate_context!())

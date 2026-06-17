@@ -149,7 +149,7 @@ function loadTranslucent(): boolean {
 type ApiStatus = "connecting" | "ready" | "offline";
 
 const HEALTH_POLL_INTERVAL_MS = 1000;
-const HEALTH_POLL_MAX_ATTEMPTS = 15;
+const HEALTH_POLL_MAX_ATTEMPTS = 60;
 
 const SAFE_MODE_STATIC =
   "> [RATIONALE] GRACEFUL DEGRADATION ACTIVATED. NON-LINEAR DEBUFFS PARSED TO ZERO. REST IS LOGICALLY JUSTIFIED.\n" +

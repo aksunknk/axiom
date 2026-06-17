@@ -1,3 +1,5 @@
+import { apiFetch, API_BASE } from "./http";
+
 /** 汎用イベント種別。v1.5 以降の離散イベントを統一管理する。 */
 export type EventKind =
   | "safe_mode_toggle"
@@ -29,12 +31,10 @@ export type EventCreatePayload = {
   timestamp: string;
 };
 
-const API_BASE = import.meta.env.VITE_API_BASE ?? "http://127.0.0.1:8000";
-
 export async function createEvent(
   payload: EventCreatePayload
 ): Promise<EventEntry> {
-  const res = await fetch(`${API_BASE}/api/events`, {
+  const res = await apiFetch(`${API_BASE}/api/events`, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify(payload),
@@ -50,7 +50,7 @@ export async function fetchEvents(
   if (opts?.kind) params.set("kind", opts.kind);
   if (opts?.days != null) params.set("days", String(opts.days));
   const qs = params.toString();
-  const res = await fetch(`${API_BASE}/api/events${qs ? `?${qs}` : ""}`);
+  const res = await apiFetch(`${API_BASE}/api/events${qs ? `?${qs}` : ""}`);
   if (!res.ok) throw new Error(`GET /api/events failed: ${res.status}`);
   return res.json();
 }
@@ -59,7 +59,7 @@ export async function countEvents(
   kind: EventKind,
   days = 1
 ): Promise<number> {
-  const res = await fetch(
+  const res = await apiFetch(
     `${API_BASE}/api/events/count?kind=${kind}&days=${days}`
   );
   if (!res.ok) throw new Error(`GET /api/events/count failed: ${res.status}`);
